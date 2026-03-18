@@ -485,10 +485,10 @@ if __name__ == "__main__":
 
     run_count = first_stage()
 
-    if run_count % 10 == 0:
+    if run_count % 2 == 0:
         second_stage()
         third_stage()
     else:
-        print("ℹ️ 本次不是 10 的倍数，跳过第二、三阶段")
+        print("ℹ️ 本次不是 2 的倍数，跳过第二、三阶段")
 
     push_all_files()
