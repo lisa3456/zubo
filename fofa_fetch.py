@@ -413,20 +413,20 @@ def third_stage():
 
     print(f"✅ 检测完成，可播放 IP 共 {len(playable_ips)} 个")
 
-     # ======================
-     # 按频道收集线路（最多50条）
-     # ======================
+    # ======================
+    # 按频道收集线路（最多50条）
+    # ======================
     channel_lines = {}
     operator_playable_ips = {}
-        for ip_port in playable_ips:
+    for ip_port in playable_ips:
         operator = ip_info.get(ip_port, "未知")
         operator_playable_ips.setdefault(operator, set()).add(ip_port)
-            for c, u in groups.get(ip_port, []):
+        for c, u in groups.get(ip_port, []):
             key = f"{c},{u}${operator}"
             channel_lines.setdefault(c, []).append(key)
-     # 每个频道只保留前 50 条
+    # 每个频道只保留前 50 条
     valid_lines = []
-        for ch, lines in channel_lines.items():
+    for ch, lines in channel_lines.items():
         valid_lines.extend(lines[:50])  # 这里控制最多50条
     print(f"✅ 已限制：每个频道最多保留 50 条线路")
     
