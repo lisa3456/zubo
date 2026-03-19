@@ -1,0 +1,52 @@
+name: Sync IP Folder
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout 本仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 克隆目标仓库并追加IP内容（不覆盖原有数据）
+        run: |
+          # 克隆目标仓库
+          git clone --depth 1 https://github.com/adminouyang/TV-yjc.git temp-tvyjc
+          # 确保本地ip目录存在
+          mkdir -p ip
+          cd ip
+
+          # 遍历目标仓库result_ip下的所有txt文件
+          find ../temp-tvyjc/IP_Scan/result_ip -type f -name "*.txt" | while read src_file; do
+            filename=$(basename "$src_file")
+            dest="$filename"
+
+            echo "正在处理: $filename"
+            if [ -f "$dest" ]; then
+              # 只追加目标文件中不存在的行（去重追加）
+              grep -xFf "$dest" "$src_file" -v >> "$dest" || true
+              # 全局去重，避免多次追加后产生重复行
+              awk '!seen[$0]++' "$dest" > "$dest.tmp" && mv "$dest.tmp" "$dest"
+            else
+              # 如果本地文件不存在，直接复制过去
+              cp "$src_file" .
+            fi
+          done
+
+          # 清理临时目录
+          rm -rf ../temp-tvyjc
+
+      - name: 提交并推送更新
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add ip/
+          git commit -m "更新从TV-yjc" || echo "No changes to commit"
+          git push
