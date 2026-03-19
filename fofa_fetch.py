@@ -413,26 +413,35 @@ def third_stage():
 
     print(f"✅ 检测完成，可播放 IP 共 {len(playable_ips)} 个")
 
-    # 按频道收集线路（最多50条，优先北京、上海、四川IP）
+    # 按频道收集线路（最多50条，优先北京、上海、四川IP | 方案1高性能版）
     channel_lines = {}
     operator_playable_ips = {}
     priority_provinces = {"北京", "上海", "四川"}
     for ip_port in playable_ips:
         operator = ip_info.get(ip_port, "未知")
         operator_playable_ips.setdefault(operator, set()).add(ip_port)
-     # 直接从 operator 里判断省份
-        province = "未知"
-        for prov in priority_provinces:
-            if prov in operator:
-               province = prov
-               break
+        # 快速判断是否为优先省份IP
+        is_priority = any(prov in operator for prov in priority_provinces)
+        # 按优先级分堆存入频道
         for c, u in groups.get(ip_port, []):
             key = f"{c},{u}${operator}"
-            channel_lines.setdefault(c, []).append((key, province))
+            if c not in channel_lines:
+                # 初始化：优先堆 + 普通堆
+                channel_lines[c] = {"priority": [], "normal": []}
+            if is_priority:
+                channel_lines[c]["priority"].append(key)
+            else:
+                channel_lines[c]["normal"].append(key)
+    # 合并优先堆+普通堆，每个频道最多50条
     valid_lines = []
-    for ch, items in channel_lines.items():
-        items.sort(key=lambda x: 0 if x[1] in priority_provinces else 1)
-        valid_lines.extend([key for key, prov in items[:50]])
+    for ch, heap_dict in channel_lines.items():
+        prio_list = heap_dict["priority"]
+        norm_list = heap_dict["normal"]
+        # 优先堆全取 + 普通堆补位，总条数不超50
+        take_prio = len(prio_list)
+        take_norm = 50 - take_prio
+        selected = prio_list[:50] + norm_list[:take_norm] if take_norm > 0 else prio_list[:50]
+        valid_lines.extend(selected)
     print(f"✅ 已限制：每个频道最多保留 50 条线路，优先北京、上海、四川IP")
     
     # 写回IP文件
