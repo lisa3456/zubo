@@ -68,7 +68,7 @@ jobs:
           if git diff --staged --quiet; then
             echo "✅ 无新IP可追加"
           else
-            git commit -m "chore: append new IPs from iptvz (telecom & unicom, exclude archive)"
+            git commit -m "从iptvz更新"
             git push
             echo "✅ 已成功追加并推送新IP"
           fi
