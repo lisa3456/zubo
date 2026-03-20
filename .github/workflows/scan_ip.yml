@@ -1,8 +1,8 @@
 name: Scan IP
 on:
   workflow_dispatch:  # 手动触发
-  schedule:
-    - cron: '* 19 * * *'  # 每天 UTC 00:10（北京时间 08:10）运行
+  #schedule:
+    #- cron: '* 19 * * *'  # 每天 UTC 00:10（北京时间 08:10）运行
 jobs:
   scan:
     runs-on: ubuntu-latest
