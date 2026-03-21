@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ==================== 只提速不减量版全局配置 ====================
 MAX_SCAN_DURATION = 2400    # 最大扫描时长 40 分钟
 DEFAULT_MAX_WORKERS = 120     # 线程池大小（优化后）
-REQUEST_TIMEOUT = 1.5       # 请求超时（提速关键）
+REQUEST_TIMEOUT = 1       # 请求超时（提速关键）
 PROGRESS_INTERVAL = 2000    # 进度日志间隔
 
 def expand_ip_range(ip_str):
