@@ -7,7 +7,7 @@ from urllib3.exceptions import InsecureRequestWarning
 # 禁用不安全请求警告
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
-# ====================== 配置区（和你之前一致） ======================
+# ====================== 配置区 ======================
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -81,7 +81,6 @@ CHANNEL_MAPPING = {
     "陕西卫视": ["陕西卫视"],
 }
 
-# 关键修改1：将每个频道的地址限制从20改为50，避免目标IP频道被挤掉
 RESULTS_PER_CHANNEL = 50
 
 def exact_channel_match(channel_name, pattern_name):
@@ -165,7 +164,6 @@ def sort_channels_by_specified_order(channels_list, category_channels):
             return (float('inf'), name)
     return sorted(channels_list, key=get_channel_sort_key)
 
-# 关键修改2：修复CCTV误分到卫视频道的问题，优先归类央视频道
 def classify_channels_by_category(channels_data):
     categorized_channels = {}
     for category in CHANNEL_CATEGORIES.keys():
@@ -178,12 +176,10 @@ def classify_channels_by_category(channels_data):
             name = parts[0]
             url = parts[1]
             assigned = False
-            # 优先判断CCTV开头的频道，强制归入央视频道
             if name.startswith("CCTV"):
                 categorized_channels["央视频道"].append((name, url))
                 assigned = True
             else:
-                # 非CCTV频道按原有逻辑匹配分类
                 for category, channel_list in CHANNEL_CATEGORIES.items():
                     if name in channel_list:
                         categorized_channels[category].append((name, url))
@@ -232,7 +228,6 @@ def group_and_sort_channels_by_category(categorized_channels):
             processed_categories[category] = grouped_channels
     return processed_categories
 
-# ====================== 仅访问单个IP（无网段扫描） ======================
 def check_single_ip(ip_port, url_end):
     try:
         url = f"http://{ip_port}{url_end}"
@@ -251,7 +246,6 @@ def extract_channels(url):
         url_x = f"{urls[0]}//{urls[2]}"
         current_ip_port = urls[2]
         
-        # 先处理 ZHGXTV 纯文本格式（110.241.188.75:808 这类）
         if "ZHGXTV" in url:
             response = requests.get(url, timeout=2, headers=HEADERS, verify=False)
             json_data = response.content.decode('utf-8')
@@ -271,7 +265,6 @@ def extract_channels(url):
                     if len(parts) >= 4:
                         urld = f"{url_x}/{parts[3]}"
                         hotel_channels.append((name, urld))
-        # 再处理 iptv JSON 格式
         elif "iptv" in url:
             response = requests.get(url, timeout=3, headers=HEADERS, verify=False)
             json_data = response.json()
@@ -289,7 +282,6 @@ def extract_channels(url):
         print(f"解析频道错误 {url}: {str(e)[:30]}")
         return []
 
-# ====================== 核心流程 ======================
 def hotel_iptv():
     try:
         ip_file = os.path.join(IP_DIR, "hotel_ip.txt")
@@ -343,20 +335,20 @@ def hotel_iptv():
         
         output_dir = "Hotel"
         os.makedirs(output_dir, exist_ok=True)
-        # 关键修改3：输出文件名为 hotel.txt（原iptv.txt）
         final_output = os.path.join(output_dir, "hotel.txt")
         beijing_time = datetime.datetime.now()
         current_time = beijing_time.strftime("%Y/%m/%d %H:%M")
         
+        # 关键修复：确保分类块之间用换行分隔，避免CCTV错位
         with open(final_output, "w", encoding='utf-8') as f_out:
             f_out.write(f"{current_time}更新,#genre#\n")
             for fp in file_paths:
                 if os.path.exists(fp):
                     with open(fp, "r", encoding='utf-8') as f_in:
-                        f_out.write(f"\n{f_in.read()}")
+                        content = f_in.read()
+                        f_out.write(f"\n{content}\n")
                     os.remove(fp)
         
-        # 按「频道名+IP」去重，避免同名频道被覆盖
         with open(final_output, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         
@@ -396,7 +388,7 @@ def main():
     hours, remainder = divmod(run_time.seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     print(f"总运行时间: {hours}小时{minutes}分{seconds}秒")
-    print("📌 已移除测速+网段扫描 | 仅保留央视频道+卫视频道 | 输出hotel.txt | 多IP共存不覆盖 | CCTV正确归类")
+    print("📌 已移除测速+网段扫描 | 仅保留央视频道+卫视频道 | 输出hotel.txt | CCTV正确归类")
 
 if __name__ == "__main__":
     main()
