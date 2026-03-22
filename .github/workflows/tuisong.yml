@@ -2,9 +2,9 @@ name: tuisong
 
 on:
   workflow_run:
-    workflows: ["zubo", "hotel"]  # 监听小写的 hotel workflow
+    workflows: ["zubo", "hotel"]  # 监听你的两个 workflow
     types: [completed]
-  workflow_dispatch:
+  workflow_dispatch:  # 保留手动触发
 
 jobs:
   sync:
@@ -14,13 +14,13 @@ jobs:
       (github.event.workflow_run.conclusion == 'success')
 
     steps:
-      - name: Checkout 源仓库
+      - name: Checkout 源仓库 (zubo)
         uses: actions/checkout@v4
         with:
           path: source
           fetch-depth: 1
 
-      - name: Checkout 目标仓库
+      - name: Checkout 目标仓库 (lisa3456.github.io)
         uses: actions/checkout@v4
         with:
           repository: lisa3456/lisa3456.github.io
@@ -28,36 +28,39 @@ jobs:
           path: target
           fetch-depth: 1
 
-      - name: 根据触发 workflow 同步对应文件
+      - name: 同步对应文件到 Pages 仓库
         run: |
           TRIGGER_WORKFLOW="${{ github.event.workflow_run.name }}"
           echo "触发 workflow: $TRIGGER_WORKFLOW"
 
+          # 同步 zubo 生成的 IPTV.txt
           if [ "$TRIGGER_WORKFLOW" = "zubo" ]; then
             if [ -f "source/IPTV.txt" ]; then
               cp -f source/IPTV.txt target/
-              echo "✅ 同步 IPTV.txt 完成"
+              echo "✅ 成功同步 IPTV.txt"
             else
               echo "❌ 未找到 IPTV.txt，跳过"
             fi
-          elif [ "$TRIGGER_WORKFLOW" = "hotel" ]; then  # 小写匹配
+          # 同步 hotel 生成的 hotel.txt
+          elif [ "$TRIGGER_WORKFLOW" = "hotel" ]; then
             if [ -f "source/Hotel/hotel.txt" ]; then
               cp -f source/Hotel/hotel.txt target/
-              echo "✅ 同步 hotel.txt 完成"
+              echo "✅ 成功同步 hotel.txt"
             else
               echo "❌ 未找到 Hotel/hotel.txt，跳过"
             fi
+          # 手动触发时同步所有文件
           elif [ "$TRIGGER_WORKFLOW" = "" ]; then
             echo "🔧 手动触发，同步所有文件"
             [ -f "source/IPTV.txt" ] && cp -f source/IPTV.txt target/ && echo "✅ 同步 IPTV.txt"
             [ -f "source/Hotel/hotel.txt" ] && cp -f source/Hotel/hotel.txt target/ && echo "✅ 同步 hotel.txt"
           fi
 
-      - name: 提交并推送
+      - name: 提交并推送到 GitHub Pages
         working-directory: target
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add IPTV.txt hotel.txt || true
-          git commit -m "chore: sync files from ${{ github.event.workflow_run.name }}" || echo "⚠️ 无变更"
+          git commit -m "chore: sync files from ${{ github.event.workflow_run.name }}" || echo "⚠️ 无文件变更，无需提交"
           git push origin master
