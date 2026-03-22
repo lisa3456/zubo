@@ -7,7 +7,7 @@ from urllib3.exceptions import InsecureRequestWarning
 # 禁用不安全请求警告
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
-# ====================== 配置区（极致精简） ======================
+# ====================== 配置区（和你之前一致） ======================
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -224,7 +224,7 @@ def group_and_sort_channels_by_category(categorized_channels):
             processed_categories[category] = grouped_channels
     return processed_categories
 
-# ====================== 移除网段扫描，仅访问IP池里的单个IP ======================
+# ====================== 仅访问单个IP（无网段扫描） ======================
 def check_single_ip(ip_port, url_end):
     try:
         url = f"http://{ip_port}{url_end}"
@@ -236,6 +236,7 @@ def check_single_ip(ip_port, url_end):
     except:
         return None
 
+# ====================== 关键修改1：先处理ZHGXTV纯文本格式 ======================
 def extract_channels(url):
     hotel_channels = []
     try:
@@ -243,19 +244,8 @@ def extract_channels(url):
         url_x = f"{urls[0]}//{urls[2]}"
         current_ip_port = urls[2]
         
-        if "iptv" in url:
-            response = requests.get(url, timeout=3, headers=HEADERS, verify=False)
-            json_data = response.json()
-            for item in json_data.get('data', []):
-                if isinstance(item, dict):
-                    name = item.get('name')
-                    urlx = item.get('url')
-                    if urlx and ("tsfile" in urlx or "m3u8" in urlx):
-                        if not urlx.startswith('/'):
-                            urlx = '/' + urlx
-                        urld = f"{url_x}{urlx}"
-                        hotel_channels.append((name, urld))
-        elif "ZHGXTV" in url:
+        # 先处理 ZHGXTV 纯文本格式（110.241.188.75:808 这类）
+        if "ZHGXTV" in url:
             response = requests.get(url, timeout=2, headers=HEADERS, verify=False)
             json_data = response.content.decode('utf-8')
             data_lines = json_data.split('\n')
@@ -274,12 +264,25 @@ def extract_channels(url):
                     if len(parts) >= 4:
                         urld = f"{url_x}/{parts[3]}"
                         hotel_channels.append((name, urld))
+        # 再处理 iptv JSON 格式
+        elif "iptv" in url:
+            response = requests.get(url, timeout=3, headers=HEADERS, verify=False)
+            json_data = response.json()
+            for item in json_data.get('data', []):
+                if isinstance(item, dict):
+                    name = item.get('name')
+                    urlx = item.get('url')
+                    if urlx and ("tsfile" in urlx or "m3u8" in urlx):
+                        if not urlx.startswith('/'):
+                            urlx = '/' + urlx
+                        urld = f"{url_x}{urlx}"
+                        hotel_channels.append((name, urld))
         return hotel_channels
     except Exception as e:
         print(f"解析频道错误 {url}: {str(e)[:30]}")
         return []
 
-# ====================== 核心流程（极致精简版） ======================
+# ====================== 核心流程 ======================
 def hotel_iptv():
     try:
         ip_file = os.path.join(IP_DIR, "hotel_ip.txt")
@@ -296,7 +299,6 @@ def hotel_iptv():
         valid_urls = []
         url_ends = ["/iptv/live/1000.json?key=txiptv", "/ZHGXTV/Public/json/live_interface.txt"]
         
-        # 仅访问IP池里的单个IP，不再扫描网段
         for ip_port in ip_ports:
             for url_end in url_ends:
                 url = check_single_ip(ip_port, url_end)
@@ -337,6 +339,8 @@ def hotel_iptv():
         final_output = os.path.join(output_dir, "iptv.txt")
         beijing_time = datetime.datetime.now()
         current_time = beijing_time.strftime("%Y/%m/%d %H:%M")
+        
+        # ====================== 关键修改2：按「频道名+IP」去重 ======================
         with open(final_output, "w", encoding='utf-8') as f_out:
             f_out.write(f"{current_time}更新,#genre#\n")
             for fp in file_paths:
@@ -345,19 +349,33 @@ def hotel_iptv():
                         f_out.write(f"\n{f_in.read()}")
                     os.remove(fp)
         
+        # 按「频道名+IP」去重，避免同名频道被覆盖
         with open(final_output, 'r', encoding='utf-8') as f:
             lines = f.readlines()
+        
         unique_lines = []
-        seen_lines = set()
+        seen = set()
+        genre_lines = []
         for line in lines:
-            if line not in seen_lines:
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+            if "#genre#" in line_stripped:
+                genre_lines.append(line)
+                continue
+            name, url = line_stripped.split(",", 1)
+            ip_port = url.split("//")[1].split("/")[0]
+            key = (name, ip_port)
+            if key not in seen:
+                seen.add(key)
                 unique_lines.append(line)
-                seen_lines.add(line)
+        
+        final_lines = genre_lines + unique_lines
         with open(final_output, 'w', encoding='utf-8') as f:
-            f.writelines(unique_lines)
+            f.writelines(final_lines)
         
         print(f"\n🎉 处理完成！最终文件已保存到: {final_output}")
-        print(f"📊 统计：共 {len(unique_lines)-2} 个有效频道（已去重，无测速）")
+        print(f"📊 统计：共 {len(final_lines)-2} 个有效频道（已去重，无测速）")
     except Exception as e:
         print(f"❌ 整体处理失败: {str(e)}")
 
@@ -371,7 +389,7 @@ def main():
     hours, remainder = divmod(run_time.seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     print(f"总运行时间: {hours}小时{minutes}分{seconds}秒")
-    print("📌 已移除测速+网段扫描 | 仅保留央视频道+卫视频道 | 仅输出txt格式")
+    print("📌 已移除测速+网段扫描 | 仅保留央视频道+卫视频道 | 仅输出txt格式 | 多IP共存不覆盖")
 
 if __name__ == "__main__":
     main()
