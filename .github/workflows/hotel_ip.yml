@@ -323,10 +323,6 @@ jobs:
         EOF
         
         python hotel_ip_port.py
-    
-    - name: 运行主脚本生成iptv.txt
-      run: |
-        python Hotel/hotel.py
       
     - name: Commit and push if changes
       run: |
