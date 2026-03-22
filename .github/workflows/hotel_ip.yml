@@ -472,7 +472,7 @@ jobs:
                 "https://raw.githubusercontent.com/jn950/live/refs/heads/main/tv/holive.m3u",  # txt格式
                 "https://raw.githubusercontent.com/whyun-pages/hotel-tvn/refs/heads/main/lives.txt",
                 "https://raw.githubusercontent.com/mzky/checklist/refs/heads/master/itvlist.m3u",
-                "https://raw.githubusercontent.com/TV-yjc/blob/main/Hotel/iptv.txt"
+                "https://raw.githubusercontent.com/adminouyang/TV-yjc/raw/refs/heads/main/Hotel/iptv.txt"
                 #"http://129.211.14.102:50085/sub?tv.sohu.blog=txt",
                 #"https://raw.githubusercontent.com/kenye201/TVlog/refs/heads/main/final_hotel.txt",
             ]
