@@ -339,16 +339,29 @@ def hotel_iptv():
         beijing_time = datetime.datetime.now()
         current_time = beijing_time.strftime("%Y/%m/%d %H:%M")
         
-        # 关键修复：确保分类块之间用换行分隔，避免CCTV错位
+        # ✅ 关键修复：严格按「央视→卫视」顺序写入，保证结构正确
         with open(final_output, "w", encoding='utf-8') as f_out:
             f_out.write(f"{current_time}更新,#genre#\n")
+            
+            # 先写入央视频道
             for fp in file_paths:
-                if os.path.exists(fp):
-                    with open(fp, "r", encoding='utf-8') as f_in:
-                        content = f_in.read()
-                        f_out.write(f"\n{content}\n")
-                    os.remove(fp)
+                if "央视" in fp:
+                    if os.path.exists(fp):
+                        with open(fp, "r", encoding='utf-8') as f_in:
+                            f_out.write(f"\n{f_in.read()}\n")
+                        os.remove(fp)
+                    break
+            
+            # 再写入卫视频道
+            for fp in file_paths:
+                if "卫视" in fp:
+                    if os.path.exists(fp):
+                        with open(fp, "r", encoding='utf-8') as f_in:
+                            f_out.write(f"\n{f_in.read()}\n")
+                        os.remove(fp)
+                    break
         
+        # 去重逻辑保持不变
         with open(final_output, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         
