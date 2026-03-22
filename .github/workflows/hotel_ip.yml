@@ -223,8 +223,10 @@ jobs:
         
         def test_stream_speed(channel_url, timeout=8):
             """
-            真实播放速度测速：预热1秒+持续下载3秒，检测断流，兼顾效率和准确性
-            解决测速高播放卡、测速低播放流畅问题
+            修复版真实播放速度测速：
+            - 缩短预热到0.5秒，避免有效时间为0
+            - 放宽断流检测到3秒，兼容流初始延迟
+            - 保证最小有效速度，避免返回0
             """
             try:
                 session = requests.Session()
@@ -234,34 +236,30 @@ jobs:
                     return 0.0
 
                 start_time = time.time()
-                warmup_end = start_time + 1  # 1秒预热，丢弃初始缓冲抖动数据
-                test_end = start_time + 4    # 总测速4秒，控制单频道耗时
+                warmup_end = start_time + 0.5  # 缩短预热到0.5秒
+                test_end = start_time + 5       # 总测速5秒
                 downloaded = 0
-                chunk_size = 64 * 1024      # 64KB块，贴近播放器实际读取逻辑
+                chunk_size = 64 * 1024
                 last_chunk_time = time.time()
 
                 for chunk in response.iter_content(chunk_size=chunk_size):
                     current_time = time.time()
-                    # 超时直接终止，避免卡慢
                     if current_time > test_end:
                         break
-                    # 断流检测：2秒无数据判定为不稳定，返回低速度
-                    if current_time - last_chunk_time > 2:
+                    # 放宽断流检测到3秒
+                    if current_time - last_chunk_time > 3:
                         return 1.0
                     last_chunk_time = current_time
-                    # 预热结束后统计有效下载数据
                     if current_time > warmup_end and chunk:
                         downloaded += len(chunk)
 
-                # 计算有效真实播放速度（KB/s）
                 effective_time = min(test_end, time.time()) - warmup_end
-                if effective_time <= 0 or downloaded == 0:
-                    return 0.0
+                effective_time = max(effective_time, 0.1)  # 保证有效时间至少0.1秒
                 real_speed = (downloaded / 1024) / effective_time
-                return round(max(real_speed, 0.1), 2)
+                return round(max(real_speed, 0.1), 2)  # 最小返回0.1 KB/s
 
             except requests.exceptions.Timeout:
-                return 0.0
+                return 0.1  # 超时也给最小速度
             except requests.exceptions.ConnectionError:
                 return 0.0
             except Exception as e:
@@ -332,9 +330,7 @@ jobs:
             
             if not available_ips:
                 print("警告: 没有找到可用的IP端口，直接使用所有提取的IP端口")
-                # 如果都没有可用，直接使用所有IP端口，假设它们都是可用的
                 for ip_port in ip_port_list:
-                    # 假设都是iptv接口
                     available_ips.append((ip_port, f"http://{ip_port}/iptv/live/1000.json?key=txiptv"))
                 print(f"将使用所有 {len(available_ips)} 个IP端口进行测试")
             
@@ -350,12 +346,10 @@ jobs:
                     
                     if not channels:
                         print(f"    {ip_port}: 无频道信息，尝试备用接口...")
-                        # 尝试备用接口
                         if "iptv" in interface_url:
                             alt_url = f"http://{ip_port}/ZHGXTV/Public/json/live_interface.txt"
                         else:
                             alt_url = f"http://{ip_port}/iptv/live/1000.json?key=txiptv"
-                        
                         channels = hotel_channels_from_ip_port(ip_port, alt_url)
                     
                     if not channels:
@@ -367,7 +361,6 @@ jobs:
                     
                     if not cctv_channels:
                         print(f"    {ip_port}: 无CCTV频道，使用所有频道测试")
-                        # 如果没有CCTV频道，使用所有频道
                         cctv_channels = channels
                     
                     print(f"    {ip_port}: 找到 {len(cctv_channels)} 个可测试频道")
@@ -384,7 +377,7 @@ jobs:
                         tested_channels += 1
                         print(f"    {ip_port}: 测试频道 [{channel_name}] ({tested_channels}/{max_test_channels})")
                         
-                        # 测速（调用真实播放速度测速函数）
+                        # 测速（调用修复版真实播放速度测速函数）
                         speed = test_stream_speed(channel_url)
                         
                         if speed > best_speed:
@@ -392,21 +385,20 @@ jobs:
                         
                         print(f"    {ip_port}: 频道 [{channel_name}] 真实播放速度: {speed:.2f} KB/s")
                         
-                        # 速度达标提前结束，提升效率
-                        if speed > 500:  # 500KB/s足够流畅播放高清
+                        if speed > 500:
                             break
                     
-                    # 提高有效阈值，过滤真正无法播放的IP（0.1→5KB/s）
-                    if best_speed > 5:
+                    # 恢复阈值为0.1，避免过滤可播放流
+                    if best_speed > 0.1:
                         speed_tested_ips.append((ip_port, best_speed))
                         print(f"    {ip_port}: 通过测速 (最佳真实播放速度: {best_speed:.2f} KB/s)")
                     else:
-                        print(f"    {ip_port}: 测速失败 (最佳真实播放速度: {best_speed:.2f} KB/s，低于5KB/s有效阈值)")
+                        print(f"    {ip_port}: 测速失败 (最佳真实播放速度: {best_speed:.2f} KB/s)")
                         
                 except Exception as e:
                     print(f"    {ip_port}: 处理失败 - {e}")
             
-            # 按真实播放速度降序排序，速度快的在前
+            # 按真实播放速度降序排序
             speed_tested_ips.sort(key=lambda x: x[1], reverse=True)
             
             print(f"\n步骤4: 保存通过测速的IP端口...")
@@ -418,7 +410,7 @@ jobs:
             
             with open(output_file, 'w', encoding='utf-8') as f:
                 for ip_port, speed in speed_tested_ips:
-                    f.write(f"{ip_port}\n")  # 如需保留速度，可改为：f"{ip_port} # 播放速度：{speed:.2f} KB/s\n"
+                    f.write(f"{ip_port}\n")
             
             # 如果没有通过测速的，保存所有可用的IP端口
             if not speed_tested_ips:
@@ -428,7 +420,7 @@ jobs:
                         f.write(f"{ip_port}  # 未通过真实播放测速\n")
                 speed_tested_ips = [(ip_port, 0) for ip_port, _ in available_ips]
             
-            # 统计信息优化，标注真实播放速度
+            # 统计信息
             print(f"\n" + "="*60)
             print(f"处理完成统计 (基于真实播放速度测速):")
             print(f"  - 初始提取IP端口: {len(ip_port_set)} 个")
@@ -448,18 +440,14 @@ jobs:
                 print("\n警告: 没有找到真实播放速度达标的IP端口")
         
         if __name__ == "__main__":
-            # 禁用SSL警告
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             
-            # 示例URL列表
             urls = [
                 "https://raw.githubusercontent.com/jn950/live/refs/heads/main/tv/holive.m3u",
                 "https://raw.githubusercontent.com/whyun-pages/hotel-tvn/refs/heads/main/lives.txt",
                 "https://raw.githubusercontent.com/mzky/checklist/refs/heads/master/itvlist.m3u",
                 "https://github.com/adminouyang/TV-yjc/raw/refs/heads/main/Hotel/iptv.txt"
-                #"http://129.211.14.102:50085/sub?tv.sohu.blog=txt",
-                #"https://raw.githubusercontent.com/kenye201/TVlog/refs/heads/main/final_hotel.txt",
             ]
             
             hotel_ip_port_from_urls(urls)
