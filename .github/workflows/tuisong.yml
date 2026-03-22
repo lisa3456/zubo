@@ -2,9 +2,9 @@ name: tuisong
 
 on:
   workflow_run:
-    workflows: ["zubo", "Hotel"]  # 监听两个 workflow
+    workflows: ["zubo", "hotel"]  # 监听小写的 hotel workflow
     types: [completed]
-  workflow_dispatch:  # 保留手动触发
+  workflow_dispatch:
 
 jobs:
   sync:
@@ -20,7 +20,7 @@ jobs:
           path: source
           fetch-depth: 1
 
-      - name: Checkout 目标仓库 (lisa3456.github.io)
+      - name: Checkout 目标仓库
         uses: actions/checkout@v4
         with:
           repository: lisa3456/lisa3456.github.io
@@ -34,15 +34,13 @@ jobs:
           echo "触发 workflow: $TRIGGER_WORKFLOW"
 
           if [ "$TRIGGER_WORKFLOW" = "zubo" ]; then
-            # 推送 iptv.txt
             if [ -f "source/IPTV.txt" ]; then
               cp -f source/IPTV.txt target/
               echo "✅ 同步 IPTV.txt 完成"
             else
               echo "❌ 未找到 IPTV.txt，跳过"
             fi
-          elif [ "$TRIGGER_WORKFLOW" = "Hotel" ]; then
-            # 推送 hotel.txt
+          elif [ "$TRIGGER_WORKFLOW" = "hotel" ]; then  # 小写匹配
             if [ -f "source/Hotel/hotel.txt" ]; then
               cp -f source/Hotel/hotel.txt target/
               echo "✅ 同步 hotel.txt 完成"
@@ -50,17 +48,16 @@ jobs:
               echo "❌ 未找到 Hotel/hotel.txt，跳过"
             fi
           elif [ "$TRIGGER_WORKFLOW" = "" ]; then
-            # 手动触发：同步两个文件
             echo "🔧 手动触发，同步所有文件"
             [ -f "source/IPTV.txt" ] && cp -f source/IPTV.txt target/ && echo "✅ 同步 IPTV.txt"
             [ -f "source/Hotel/hotel.txt" ] && cp -f source/Hotel/hotel.txt target/ && echo "✅ 同步 hotel.txt"
           fi
 
-      - name: 提交并推送到 GitHub Pages
+      - name: 提交并推送
         working-directory: target
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add IPTV.txt hotel.txt || true
-          git commit -m "chore: sync files from ${{ github.event.workflow_run.name }}" || echo "⚠️ 无文件变更，无需提交"
+          git commit -m "chore: sync files from ${{ github.event.workflow_run.name }}" || echo "⚠️ 无变更"
           git push origin master
