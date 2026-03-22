@@ -2,16 +2,7 @@ name: hotel IP and Port
 
 on:
   schedule:
-    # 每天凌15点自动运行（UTC时间，北京时间+8）
-    - cron: '0 9 * * *'
-  # push:
-  #   # 当脚本文件有更新时触发
-  #   paths:
-  #     - 'hotel_ip_port.yml'
-  # pull_request:
-  #   paths:
-  #     - 'hotel_ip_port.yml'
-  # 支持手动触发
+    - cron: '0 20 * * *'
   workflow_dispatch:
 
 jobs:
