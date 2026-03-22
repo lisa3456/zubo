@@ -4,7 +4,7 @@ import datetime
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ====================== 完全保留你的所有频道配置与核心函数 ======================
+# ====================== 完全保留你的频道配置 + 复刻别人的提取逻辑 ======================
 # 配置区
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -287,131 +287,157 @@ def group_and_sort_channels_by_category(categorized_channels):
             processed_categories[category] = grouped_channels
     return processed_categories
 
-# ====================== 核心流程：读取 YML 输出的 IP → 提取频道（含10.8.8.200替换） ======================
-def extract_channels_from_ip(ip_port):
-    hotel_channels = []
-    url_ends = [
-        "/iptv/live/1000.json?key=txiptv",
-        "/ZHGXTV/Public/json/live_interface.txt",
-        "/",
-        "/hls/",
-        "/playlist.m3u",
-        "/channel.m3u",
-        "/index.m3u8"
-    ]
+# ====================== 复刻别人的核心提取逻辑 ======================
+# 1. 读取IP配置（复刻网段扫描逻辑）
+def read_config(ip_port):
+    """解析IP:Port为网段配置，复刻别人的网段扫描逻辑"""
+    ip_configs = []
     try:
-        for url_end in url_ends:
-            url = f"http://{ip_port}{url_end}"
-            response = requests.get(url, timeout=5, headers=HEADERS, verify=False)
-            if response.status_code != 200:
-                continue
-            
-            # 1. 处理 JSON 格式
-            if "json" in url_end:
-                try:
-                    json_data = response.json()
-                    for item in json_data.get('data', []):
-                        if isinstance(item, dict):
-                            name = item.get('name')
-                            urlx = item.get('url')
-                            if name and urlx:
-                                # 修复嵌套URL
-                                if urlx.startswith("://"):
-                                    urlx = "http" + urlx
-                                elif not urlx.startswith("http"):
-                                    if not urlx.startswith('/'):
-                                        urlx = '/' + urlx
-                                    urlx = f"http://{ip_port}{urlx}"
-                                # ✅ 关键：替换 10.8.8.200 为当前真实IP+端口
-                                urlx = re.sub(r'http://10\.8\.8\.200(:\d+)?', f'http://{ip_port}', urlx)
-                                if "tsfile" in urlx or "m3u8" in urlx:
-                                    hotel_channels.append((name, urlx, "0.000"))
-                except:
-                    pass
-            
-            # 2. 处理 TXT 格式（你这种「频道名,完整URL」格式走这里）
-            elif "txt" in url_end or url.endswith((".m3u", ".m3u8")):
-                content = response.text
-                lines = content.split('\n')
-                for line in lines:
-                    line = line.strip()
-                    if line and "," in line and not line.startswith('#'):
-                        parts = line.split(',', 1)
-                        if len(parts) >= 2:
-                            name = parts[0].strip()
-                            channel_url = parts[1].strip()
-                            if name and channel_url:
-                                # 修复嵌套URL
-                                if channel_url.startswith("://"):
-                                    channel_url = "http" + channel_url
-                                elif not channel_url.startswith("http"):
-                                    if not channel_url.startswith('/'):
-                                        channel_url = '/' + channel_url
-                                    channel_url = f"http://{ip_port}{channel_url}"
-                                # ✅ 关键：替换 10.8.8.200 为当前真实IP+端口
-                                channel_url = re.sub(r'http://10\.8\.8\.200(:\d+)?', f'http://{ip_port}', channel_url)
-                                if "tsfile" in channel_url or "m3u8" in channel_url:
-                                    hotel_channels.append((name, channel_url, "0.000"))
-            
-            # 3. 处理 m3u8 列表格式（如 #EXTINF 开头的播放列表）
-            elif url.endswith((".m3u", ".m3u8")) or url_end in ["/", "/hls/"]:
-                content = response.text
-                lines = content.splitlines()
-                current_name = None
-                for line in lines:
-                    line = line.strip()
-                    if line.startswith("#EXTINF"):
-                        match = re.search(r',([^,]+)$', line)
-                        if match:
-                            current_name = match.group(1).strip()
-                    elif line.startswith("http") and current_name:
-                        # ✅ 关键：替换 10.8.8.200 为当前真实IP+端口
-                        line = re.sub(r'http://10\.8\.8\.200(:\d+)?', f'http://{ip_port}', line)
-                        hotel_channels.append((current_name, line, "0.000"))
-                        current_name = None
-                    elif line.startswith("://") and current_name:
-                        fixed_url = "http" + line
-                        fixed_url = re.sub(r'http://10\.8\.8\.200(:\d+)?', f'http://{ip_port}', fixed_url)
-                        hotel_channels.append((current_name, fixed_url, "0.000"))
-                        current_name = None
-                    elif line.startswith("/hls/") and current_name:
-                        full_url = f"http://{ip_port}{line}"
-                        hotel_channels.append((current_name, full_url, "0.000"))
-                        current_name = None
-    
-        return hotel_channels
+        if ':' in ip_port:
+            ip_part, port = ip_port.split(':', 1)
+            parts = ip_part.split('.')
+            if len(parts) == 4:
+                a, b, c, d = parts
+                # 关键：复刻别人的逻辑，将IP第四段改为1，扫描整个网段
+                ip = f"{a}.{b}.{c}.1"
+                ip_configs.append((ip, port))
+        return ip_configs
     except Exception as e:
-        print(f"❌ {ip_port} 提取频道失败: {str(e)[:30]}")
+        print(f"读取IP配置错误: {e}")
         return []
 
-# 核心流程函数（完整保留）
+# 2. 检测单个IP:Port的URL可用性（复刻别人的检测逻辑）
+def check_ip_port(ip_port, url_end):
+    try:
+        url = f"http://{ip_port}{url_end}"
+        resp = requests.get(url, timeout=3, headers=HEADERS, verify=False)
+        resp.raise_for_status()
+        if "tsfile" in resp.text or "hls" in resp.text or "m3u8" in resp.text:
+            print(f"{url} 访问成功")
+            return url
+    except:
+        return None
+
+# 3. 多线程扫描整个网段（复刻别人的网段扫描）
+def scan_ip_port(ip, port, url_end):
+    """扫描IP所在网段的所有主机（1-255）"""
+    valid_urls = []
+    a, b, c, d = map(int, ip.split('.'))
+    ip_ports = [f"{a}.{b}.{c}.{x}:{port}" for x in range(1, 256)]  # 扫描1-255段
+    with ThreadPoolExecutor(max_workers=100) as executor:
+        futures = {executor.submit(check_ip_port, ip_port, url_end): ip_port for ip_port in ip_ports}
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                valid_urls.append(result)
+    return valid_urls
+
+# 4. 提取频道（完全复刻别人的extract_channels逻辑）
+def extract_channels(url):
+    hotel_channels = []
+    try:
+        urls = url.split('/', 3)
+        url_x = f"{urls[0]}//{urls[2]}"
+        
+        if "iptv" in url:
+            response = requests.get(url, timeout=3, headers=HEADERS, verify=False)
+            json_data = response.json()
+            for item in json_data.get('data', []):
+                if isinstance(item, dict):
+                    name = item.get('name')
+                    urlx = item.get('url')
+                    if urlx and ("tsfile" in urlx or "m3u8" in urlx):
+                        if not urlx.startswith('/'):
+                            urlx = '/' + urlx
+                        urld = f"{url_x}{urlx}"
+                        hotel_channels.append((name, urld))
+        elif "ZHGXTV" in url:
+            response = requests.get(url, timeout=2, headers=HEADERS, verify=False)
+            json_data = response.content.decode('utf-8')
+            data_lines = json_data.split('\n')
+            for line in data_lines:
+                if "," in line and ("hls" in line or "m3u8" in line):
+                    name, channel_url = line.strip().split(',')
+                    parts = channel_url.split('/', 3)
+                    if len(parts) >= 4:
+                        urld = f"{url_x}/{parts[3]}"
+                        hotel_channels.append((name, urld))
+        return hotel_channels
+    except Exception as e:
+        print(f"解析频道错误 {url}: {str(e)[:30]}")
+        return []
+
+# 5. 简化测速（保留基础过滤，复刻别人的速度判断）
+def speed_test(channels):
+    """复刻别人的测速逻辑，保留速度过滤"""
+    results = []
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_ch = {executor.submit(requests.head, ch[1], timeout=3): ch for ch in channels}
+        for future in as_completed(future_to_ch):
+            name, url = future_to_ch[future]
+            try:
+                resp = future.result()
+                speed = f"{resp.elapsed.total_seconds():.3f}"
+                # 复刻别人的速度过滤逻辑
+                if float(speed) < 5.0:
+                    results.append((name, url, speed))
+            except:
+                continue
+    return results
+
+# ====================== 核心流程（整合复刻逻辑） ======================
 def hotel_iptv():
     try:
-        # 1. 读取 YML 输出的 IP 文件（纯 IP:Port 列表）
+        # 1. 读取YML输出的IP文件
         ip_file = os.path.join(IP_DIR, "hotel_ip.txt")
         if not os.path.exists(ip_file):
             print(f"错误：未找到 YML 生成的 {ip_file}")
             return
-        with open(ip_file, "r", encoding='utf-8') as f:
+        with open(ip_file, 'r', encoding='utf-8') as f:
             ip_ports = [line.strip() for line in f if line.strip()]
         if not ip_ports:
             print("警告：IP 文件为空")
             return
-        print(f"✅ 读取到 {len(ip_ports)} 个有效 IP")
+        print(f"✅ 读取到 {len(ip_ports)} 个有效 IP，开始扫描网段")
 
-        # 2. 多线程提取所有频道
+        # 2. 复刻别人的完整流程：IP配置 → 网段扫描 → 提取频道 → 测速
+        valid_urls = []
+        url_ends = ["/iptv/live/1000.json?key=txiptv", "/ZHGXTV/Public/json/live_interface.txt"]
+        configs = []
+        
+        # 解析每个IP为网段配置
+        for ip_port in ip_ports:
+            ip_config = read_config(ip_port)
+            configs.extend([(ip, port, url_end) for ip, port in ip_config for url_end in url_ends])
+        
+        # 多线程扫描网段
+        for ip, port, url_end in configs:
+            valid_urls.extend(scan_ip_port(ip, port, url_end))
+        
+        if not valid_urls:
+            print("⚠️ 未扫描到有效频道URL")
+            return
+        print(f"✅ 共扫描到 {len(valid_urls)} 个有效URL")
+
+        # 提取频道
         all_channels = []
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_ip = {executor.submit(extract_channels_from_ip, ip): ip for ip in ip_ports}
-            for future in as_completed(future_to_ip):
-                all_channels.extend(future.result())
+        for url in valid_urls:
+            all_channels.extend(extract_channels(url))
+        
         if not all_channels:
             print("⚠️ 未提取到任何频道")
             return
-        print(f"✅ 共提取到 {len(all_channels)} 个频道")
+        print(f"✅ 共提取到 {len(all_channels)} 个频道，开始测速过滤")
 
-        # 3. 频道名称统一 + 分类 + 排序
-        unified_channels = unify_channel_name(all_channels)
+        # 测速过滤
+        tested_channels = speed_test(all_channels)
+        if not tested_channels:
+            print("⚠️ 无可用频道（测速未通过）")
+            return
+        print(f"✅ 测速通过 {len(tested_channels)} 个频道")
+
+        # 3. 你的原有流程：名称统一 + 分类 + 排序
+        unified_channels = unify_channel_name(tested_channels)
         categorized_channels = classify_channels_by_category(unified_channels)
         processed_channels = group_and_sort_channels_by_category(categorized_channels)
 
@@ -463,7 +489,7 @@ def hotel_iptv():
     except Exception as e:
         print(f"❌ 整体处理失败: {str(e)}")
 
-# ====================== 主函数（完整保留） ======================
+# ====================== 主函数 ======================
 def main():
     start_time = datetime.datetime.now()
     print(f"脚本开始运行时间: {start_time.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)")
