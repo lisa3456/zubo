@@ -221,12 +221,11 @@ jobs:
                 print(f"解析频道错误 {interface_url}: {e}")
                 return []
         
-        def test_stream_speed(channel_url, timeout=8):
+        def test_stream_speed(channel_url, timeout=10):
             """
-            修复版真实播放速度测速：
-            - 缩短预热到0.5秒，避免有效时间为0
-            - 放宽断流检测到3秒，兼容流初始延迟
-            - 保证最小有效速度，避免返回0
+            稳定性优先版测速：
+            - 只要能持续输出数据，就算低速也标记为可用
+            - 延长测速到8秒，更贴近真实播放
             """
             try:
                 session = requests.Session()
@@ -236,30 +235,38 @@ jobs:
                     return 0.0
 
                 start_time = time.time()
-                warmup_end = start_time + 0.5  # 缩短预热到0.5秒
-                test_end = start_time + 5       # 总测速5秒
+                warmup_end = start_time + 1
+                test_end = start_time + 8  # 延长到8秒，更稳
                 downloaded = 0
                 chunk_size = 64 * 1024
                 last_chunk_time = time.time()
+                interrupt_count = 0
 
                 for chunk in response.iter_content(chunk_size=chunk_size):
                     current_time = time.time()
                     if current_time > test_end:
                         break
-                    # 放宽断流检测到3秒
+                    # 断流超过3秒算一次中断
                     if current_time - last_chunk_time > 3:
-                        return 1.0
+                        interrupt_count += 1
                     last_chunk_time = current_time
                     if current_time > warmup_end and chunk:
                         downloaded += len(chunk)
 
                 effective_time = min(test_end, time.time()) - warmup_end
-                effective_time = max(effective_time, 0.1)  # 保证有效时间至少0.1秒
+                effective_time = max(effective_time, 0.1)
                 real_speed = (downloaded / 1024) / effective_time
-                return round(max(real_speed, 0.1), 2)  # 最小返回0.1 KB/s
+
+                # 只要中断少，就算速度低也给一个基础分
+                if interrupt_count == 0 and real_speed > 0.5:
+                    return round(max(real_speed, 2.0), 2)  # 稳定流保底2KB/s
+                elif interrupt_count <= 1 and real_speed > 0.5:
+                    return round(real_speed, 2)
+                else:
+                    return 0.1  # 轻微不稳定也给个基础值
 
             except requests.exceptions.Timeout:
-                return 0.1  # 超时也给最小速度
+                return 0.1
             except requests.exceptions.ConnectionError:
                 return 0.0
             except Exception as e:
@@ -377,7 +384,7 @@ jobs:
                         tested_channels += 1
                         print(f"    {ip_port}: 测试频道 [{channel_name}] ({tested_channels}/{max_test_channels})")
                         
-                        # 测速（调用修复版真实播放速度测速函数）
+                        # 测速（调用稳定性优先版测速函数）
                         speed = test_stream_speed(channel_url)
                         
                         if speed > best_speed:
@@ -388,7 +395,7 @@ jobs:
                         if speed > 500:
                             break
                     
-                    # 恢复阈值为0.1，避免过滤可播放流
+                    # 保持0.1阈值，让稳定低速流也能通过
                     if best_speed > 0.1:
                         speed_tested_ips.append((ip_port, best_speed))
                         print(f"    {ip_port}: 通过测速 (最佳真实播放速度: {best_speed:.2f} KB/s)")
@@ -400,6 +407,19 @@ jobs:
             
             # 按真实播放速度降序排序
             speed_tested_ips.sort(key=lambda x: x[1], reverse=True)
+            
+            # ========== 强制加入你实测流畅的3个IP ==========
+            manual_ips = [
+                ("110.241.188.75:808", 20.0),  # 你实测最流畅
+                ("121.19.134.142:808", 15.0),  # 你实测流畅
+                ("xxx.xxx.xxx.xxx:xxxx", 10.0), # 把第三个IP填在这里
+            ]
+            for ip_port, speed in manual_ips:
+                if ip_port not in [x[0] for x in speed_tested_ips]:
+                    speed_tested_ips.append((ip_port, speed))
+            # 重新排序，让手动IP也按速度排序
+            speed_tested_ips.sort(key=lambda x: x[1], reverse=True)
+            # ==============================================
             
             print(f"\n步骤4: 保存通过测速的IP端口...")
             
