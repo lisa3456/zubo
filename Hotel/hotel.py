@@ -3,8 +3,6 @@ import re
 import datetime
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from queue import Queue
-from threading import Thread
 
 # ====================== 完全保留你的所有频道配置与核心函数 ======================
 # 配置区
@@ -289,18 +287,26 @@ def group_and_sort_channels_by_category(categorized_channels):
             processed_categories[category] = grouped_channels
     return processed_categories
 
-# ====================== 核心流程：读取 YML 输出的 IP → 提取频道 ======================
-# 从 IP:Port 提取频道（复用你的 extract_channels 逻辑）
+# ====================== 核心流程：读取 YML 输出的 IP → 提取频道（含10.8.8.200替换） ======================
 def extract_channels_from_ip(ip_port):
     hotel_channels = []
-    url_ends = ["/iptv/live/1000.json?key=txiptv", "/ZHGXTV/Public/json/live_interface.txt"]
+    url_ends = [
+        "/iptv/live/1000.json?key=txiptv",
+        "/ZHGXTV/Public/json/live_interface.txt",
+        "/",
+        "/hls/",
+        "/playlist.m3u",
+        "/channel.m3u",
+        "/index.m3u8"
+    ]
     try:
         for url_end in url_ends:
             url = f"http://{ip_port}{url_end}"
             response = requests.get(url, timeout=5, headers=HEADERS, verify=False)
             if response.status_code != 200:
                 continue
-            # 处理 JSON 格式
+            
+            # 1. 处理 JSON 格式
             if "json" in url_end:
                 try:
                     json_data = response.json()
@@ -308,15 +314,23 @@ def extract_channels_from_ip(ip_port):
                         if isinstance(item, dict):
                             name = item.get('name')
                             urlx = item.get('url')
-                            if name and urlx and ("tsfile" in urlx or "m3u8" in urlx):
-                                if not urlx.startswith('/'):
-                                    urlx = '/' + urlx
-                                urld = f"http://{ip_port}{urlx}"
-                                hotel_channels.append((name, urld, "0.000"))  # 速度默认0
+                            if name and urlx:
+                                # 修复嵌套URL
+                                if urlx.startswith("://"):
+                                    urlx = "http" + urlx
+                                elif not urlx.startswith("http"):
+                                    if not urlx.startswith('/'):
+                                        urlx = '/' + urlx
+                                    urlx = f"http://{ip_port}{urlx}"
+                                # ✅ 关键：替换 10.8.8.200 为当前真实IP+端口
+                                urlx = re.sub(r'http://10\.8\.8\.200(:\d+)?', f'http://{ip_port}', urlx)
+                                if "tsfile" in urlx or "m3u8" in urlx:
+                                    hotel_channels.append((name, urlx, "0.000"))
                 except:
                     pass
-            # 处理 TXT 格式
-            elif "txt" in url_end:
+            
+            # 2. 处理 TXT 格式（你这种「频道名,完整URL」格式走这里）
+            elif "txt" in url_end or url.endswith((".m3u", ".m3u8")):
                 content = response.text
                 lines = content.split('\n')
                 for line in lines:
@@ -326,14 +340,51 @@ def extract_channels_from_ip(ip_port):
                         if len(parts) >= 2:
                             name = parts[0].strip()
                             channel_url = parts[1].strip()
-                            if "tsfile" in channel_url or "m3u8" in channel_url:
-                                hotel_channels.append((name, channel_url, "0.000"))
+                            if name and channel_url:
+                                # 修复嵌套URL
+                                if channel_url.startswith("://"):
+                                    channel_url = "http" + channel_url
+                                elif not channel_url.startswith("http"):
+                                    if not channel_url.startswith('/'):
+                                        channel_url = '/' + channel_url
+                                    channel_url = f"http://{ip_port}{channel_url}"
+                                # ✅ 关键：替换 10.8.8.200 为当前真实IP+端口
+                                channel_url = re.sub(r'http://10\.8\.8\.200(:\d+)?', f'http://{ip_port}', channel_url)
+                                if "tsfile" in channel_url or "m3u8" in channel_url:
+                                    hotel_channels.append((name, channel_url, "0.000"))
+            
+            # 3. 处理 m3u8 列表格式（如 #EXTINF 开头的播放列表）
+            elif url.endswith((".m3u", ".m3u8")) or url_end in ["/", "/hls/"]:
+                content = response.text
+                lines = content.splitlines()
+                current_name = None
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith("#EXTINF"):
+                        match = re.search(r',([^,]+)$', line)
+                        if match:
+                            current_name = match.group(1).strip()
+                    elif line.startswith("http") and current_name:
+                        # ✅ 关键：替换 10.8.8.200 为当前真实IP+端口
+                        line = re.sub(r'http://10\.8\.8\.200(:\d+)?', f'http://{ip_port}', line)
+                        hotel_channels.append((current_name, line, "0.000"))
+                        current_name = None
+                    elif line.startswith("://") and current_name:
+                        fixed_url = "http" + line
+                        fixed_url = re.sub(r'http://10\.8\.8\.200(:\d+)?', f'http://{ip_port}', fixed_url)
+                        hotel_channels.append((current_name, fixed_url, "0.000"))
+                        current_name = None
+                    elif line.startswith("/hls/") and current_name:
+                        full_url = f"http://{ip_port}{line}"
+                        hotel_channels.append((current_name, full_url, "0.000"))
+                        current_name = None
+    
         return hotel_channels
     except Exception as e:
         print(f"❌ {ip_port} 提取频道失败: {str(e)[:30]}")
         return []
 
-# 核心流程函数
+# 核心流程函数（完整保留）
 def hotel_iptv():
     try:
         # 1. 读取 YML 输出的 IP 文件（纯 IP:Port 列表）
@@ -412,7 +463,7 @@ def hotel_iptv():
     except Exception as e:
         print(f"❌ 整体处理失败: {str(e)}")
 
-# ====================== 主函数 ======================
+# ====================== 主函数（完整保留） ======================
 def main():
     start_time = datetime.datetime.now()
     print(f"脚本开始运行时间: {start_time.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)")
