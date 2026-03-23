@@ -96,17 +96,14 @@ jobs:
       - name: 2. 从 TV-yjc 同步IP（不覆盖）
         if: github.event.schedule == '0 17 * * *' || github.event_name == 'workflow_dispatch'
         run: |
-          declare -A initial_counts
-          for file in ./ip/*.txt; do
-            [ -f "$file" ] && initial_counts["$file"]=$(wc -l < "$file") || initial_counts["$file"]=0
-          done
+          # 先把当前状态暂存，用于后续对比
+          git add ip/
+          git diff --staged > before.patch
 
+          # 执行同步逻辑
           git clone --depth 1 https://github.com/adminouyang/TV-yjc.git temp-tvyjc
           mkdir -p ip
           cd ip
-
-          total_added=0
-          declare -A file_added
 
           while read src_file; do
             filename=$(basename "$src_file")
@@ -114,34 +111,38 @@ jobs:
             echo "正在处理: $filename"
 
             if [ -f "$dest" ]; then
-              added_lines=$(grep -xFf "$dest" "$src_file" -v | wc -l)
               grep -xFf "$dest" "$src_file" -v >> "$dest" || true
               awk '!seen[$0]++' "$dest" > "$dest.tmp" && mv "$dest.tmp" "$dest"
             else
               cp "$src_file" .
-              added_lines=$(wc -l < "$dest")
             fi
 
             sed -i '/^[[:space:]]*#/d' "$dest"
             sed -i '/无可用IP/d' "$dest"
-
-            if [ $added_lines -gt 0 ]; then
-              file_added["$filename"]=$added_lines
-              total_added=$((total_added + added_lines))
-            fi
           done < <(find ../temp-tvyjc/IP_Scan/result_ip -type f -name "*.txt")
 
           rm -rf ../temp-tvyjc
           cd ..
 
+          # 统计 Git 实际新增的行数（只算 + 开头的行，排除 diff 头）
           echo "====================================="
           echo "📊 TV-yjc IP 更新统计"
+          git add ip/
+          git diff --staged > after.patch
+          # 计算新增行数：只统计以 + 开头且不是文件头的行
+          total_added=$(comm -13 <(grep -E '^\+' before.patch | grep -v '^\+\++') <(grep -E '^\+' after.patch | grep -v '^\+\++') | wc -l)
           echo "新增IP总数: $total_added 条"
           echo "更新文件列表:"
-          for file in "${!file_added[@]}"; do
-            echo "  - $file: +${file_added[$file]} 条"
+          # 按文件统计新增行数
+          comm -13 <(grep -E '^\+' before.patch | grep -v '^\+\++') <(grep -E '^\+' after.patch | grep -v '^\+\++') | awk -F: '{print $1}' | sort | uniq -c | while read count file; do
+            if [ "$count" -gt 0 ]; then
+              echo "  - $(basename "$file"): +$count 条"
+            fi
           done
           echo "====================================="
+
+          # 清理补丁文件
+          rm -f before.patch after.patch
 
       # ==============================================
       # 3. 原 IP_iptvz 任务（18:00 执行）
