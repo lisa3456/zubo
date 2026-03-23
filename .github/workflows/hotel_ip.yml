@@ -409,17 +409,17 @@ jobs:
                         if speed > 1.0:  # 1 MB/s ≈ 8 Mbps，足够流畅播放
                             break
                     
-                    # 降低阈值，只要有速度就认为可用
-                    if best_speed > 0.1:  # 速度大于0.1 MB/s
+                    # ✅ 关键修改：保留所有 ≥0.1 MB/s 的流（包含0.100）
+                    if best_speed >= 0.1:
                         speed_tested_ips.append((ip_port, best_speed))
-                        print(f"    {ip_port}: 通过测速 (最佳速度: {best_speed:.3f} MB/s)")
+                        print(f"    {ip_port}: 通过测速 (最佳真实播放速度: {best_speed:.3f} MB/s)")
                     else:
-                        print(f"    {ip_port}: 测速失败 (最佳速度: {best_speed:.3f} MB/s)")
+                        print(f"    {ip_port}: 测速失败 (最佳真实播放速度: {best_speed:.3f} MB/s)")
                         
                 except Exception as e:
                     print(f"    {ip_port}: 处理失败 - {e}")
             
-            # 按速度排序
+            # 按真实播放速度降序排序
             speed_tested_ips.sort(key=lambda x: x[1], reverse=True)
             
             print(f"\n步骤4: 保存通过测速的IP端口...")
