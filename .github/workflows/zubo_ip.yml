@@ -124,21 +124,28 @@ jobs:
           rm -rf ../temp-tvyjc
           cd ..
 
-          # 统计 Git 实际新增的行数（只算 + 开头的行，排除 diff 头）
+          # 统计 Git 实际新增的行数（修复排序 + 文件名显示）
           echo "====================================="
           echo "📊 TV-yjc IP 更新统计"
           git add ip/
           git diff --staged > after.patch
-          # 计算新增行数：只统计以 + 开头且不是文件头的行
-          total_added=$(comm -13 <(grep -E '^\+' before.patch | grep -v '^\+\++') <(grep -E '^\+' after.patch | grep -v '^\+\++') | wc -l)
+
+          # 排序 before/after 的 + 行，避免 comm 报错
+          before_plus=$(grep -E '^\+' before.patch | grep -v '^\+\++' | sort)
+          after_plus=$(grep -E '^\+' after.patch | grep -v '^\+\++' | sort)
+          total_added=$(comm -13 <(echo "$before_plus") <(echo "$after_plus") | wc -l)
+
           echo "新增IP总数: $total_added 条"
           echo "更新文件列表:"
-          # 按文件统计新增行数
-          comm -13 <(grep -E '^\+' before.patch | grep -v '^\+\++') <(grep -E '^\+' after.patch | grep -v '^\+\++') | awk -F: '{print $1}' | sort | uniq -c | while read count file; do
-            if [ "$count" -gt 0 ]; then
-              echo "  - $(basename "$file"): +$count 条"
-            fi
-          done
+
+          # 提取文件名并统计
+          comm -13 <(echo "$before_plus") <(echo "$after_plus") | \
+            sed -E 's/^\+([^:]+):.*/\1/' | \
+            sort | uniq -c | while read count file; do
+              if [ "$count" -gt 0 ]; then
+                echo "  - $(basename "$file"): +$count 条"
+              fi
+            done
           echo "====================================="
 
           # 清理补丁文件
