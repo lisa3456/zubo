@@ -96,13 +96,17 @@ jobs:
       - name: 2. 从 TV-yjc 同步IP（不覆盖）
         if: github.event.schedule == '0 17 * * *' || github.event_name == 'workflow_dispatch'
         run: |
-          # 1. 备份当前ip文件，用于差异比较
-          cp -r ip temp_ip || true
-          mkdir -p ip
+          declare -A initial_counts
+          for file in ./ip/*.txt; do
+            [ -f "$file" ] && initial_counts["$file"]=$(wc -l < "$file") || initial_counts["$file"]=0
+          done
 
-          # 2. 执行同步逻辑
           git clone --depth 1 https://github.com/adminouyang/TV-yjc.git temp-tvyjc
+          mkdir -p ip
           cd ip
+
+          total_added=0
+          declare -A file_added
 
           while read src_file; do
             filename=$(basename "$src_file")
@@ -110,58 +114,34 @@ jobs:
             echo "正在处理: $filename"
 
             if [ -f "$dest" ]; then
+              added_lines=$(grep -xFf "$dest" "$src_file" -v | wc -l)
               grep -xFf "$dest" "$src_file" -v >> "$dest" || true
               awk '!seen[$0]++' "$dest" > "$dest.tmp" && mv "$dest.tmp" "$dest"
             else
               cp "$src_file" .
+              added_lines=$(wc -l < "$dest")
             fi
 
             sed -i '/^[[:space:]]*#/d' "$dest"
             sed -i '/无可用IP/d' "$dest"
+
+            if [ $added_lines -gt 0 ]; then
+              file_added["$filename"]=$added_lines
+              total_added=$((total_added + added_lines))
+            fi
           done < <(find ../temp-tvyjc/IP_Scan/result_ip -type f -name "*.txt")
 
           rm -rf ../temp-tvyjc
           cd ..
 
-          # 3. 统计并输出（完全模仿 kakaxi 样式）
           echo "====================================="
           echo "📊 TV-yjc IP 更新统计"
-          
-          # 遍历所有处理过的文件（如果有临时文件夹就用临时的，否则直接读ip）
-          shopt -s nullglob
-          files=(../temp_ip/*.txt ip/*.txt)
-          shopt -u nullglob
-
-          # 初始化总统计
-          total_added=0
-          declare -A file_changes
-
-          # 计算差异
-          for file in "${files[@]}"; do
-            fname=$(basename "$file")
-            # 计算新增（只加+，不减）
-            if [ -f "../temp_ip/$fname" ] && [ -f "ip/$fname" ]; then
-              added=$(comm -13 <(sort ../temp_ip/$fname) <(sort ip/$fname) | wc -l)
-            elif [ -f "ip/$fname" ] && ! [ -f "../temp_ip/$fname" ]; then
-              added=$(wc -l < ip/$fname)
-            else
-              added=0
-            fi
-            if [ $added -gt 0 ]; then
-              file_changes["$fname"]=$added
-              total_added=$((total_added + added))
-            fi
-          done
-
           echo "新增IP总数: $total_added 条"
           echo "更新文件列表:"
-          for file in "${!file_changes[@]}"; do
-            echo "  - $file: +${file_changes[$file]} 条"
+          for file in "${!file_added[@]}"; do
+            echo "  - $file: +${file_added[$file]} 条"
           done
           echo "====================================="
-
-          # 清理备份
-          rm -rf temp_ip
 
       # ==============================================
       # 3. 原 IP_iptvz 任务（18:00 执行）
@@ -169,15 +149,19 @@ jobs:
       - name: 3. 从 iptvz 同步电信/联通IP
         if: github.event.schedule == '0 18 * * *' || github.event_name == 'workflow_dispatch'
         run: |
-          # 1. 备份当前ip文件
-          cp -r ip temp_ip || true
-          mkdir -p ip
+          declare -A initial_counts
+          for file in ./ip/*.txt; do
+            [ -f "$file" ] && initial_counts["$file"]=$(wc -l < "$file") || initial_counts["$file"]=0
+          done
 
-          # 2. 执行同步逻辑
           git clone --depth 1 https://github.com/q1017673817/iptvz.git temp-iptvz
+          mkdir -p ip
           cd ip
 
           CITY_LIST="北京 天津 上海 重庆"
+          total_added=0
+          declare -A file_added
+
           while read src_file; do
             filename=$(basename "$src_file")
             base="${filename/_ip.txt/}"
@@ -197,50 +181,31 @@ jobs:
             grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+" "$src_file" > "$temp_file"
 
             if [ -f "$dest" ]; then
+              added_lines=$(grep -xFf "$dest" "$temp_file" -v | wc -l)
               grep -xFf "$dest" "$temp_file" -v >> "$dest" || true
               awk '!seen[$0]++' "$dest" > "$dest.tmp" && mv "$dest.tmp" "$dest"
             else
               cp "$temp_file" "$dest"
+              added_lines=$(wc -l < "$dest")
             fi
 
             rm -f "$temp_file"
+
+            if [ $added_lines -gt 0 ]; then
+              file_added["$dest"]=$added_lines
+              total_added=$((total_added + added_lines))
+            fi
           done < <(find ../temp-iptvz/ip -type f -name "*联通_ip.txt" -o -name "*电信_ip.txt" | grep -v "存档_")
 
           rm -rf ../temp-iptvz
           cd ..
 
-          # 3. 统计并输出（完全模仿 kakaxi 样式）
           echo "====================================="
           echo "📊 iptvz IP 更新统计"
-          
-          shopt -s nullglob
-          files=(../temp_ip/*.txt ip/*.txt)
-          shopt -u nullglob
-
-          total_added=0
-          declare -A file_changes
-
-          for file in "${files[@]}"; do
-            fname=$(basename "$file")
-            if [ -f "../temp_ip/$fname" ] && [ -f "ip/$fname" ]; then
-              added=$(comm -13 <(sort ../temp_ip/$fname) <(sort ip/$fname) | wc -l)
-            elif [ -f "ip/$fname" ] && ! [ -f "../temp_ip/$fname" ]; then
-              added=$(wc -l < ip/$fname)
-            else
-              added=0
-            fi
-            if [ $added -gt 0 ]; then
-              file_changes["$fname"]=$added
-              total_added=$((total_added + added))
-            fi
-          done
-
           echo "新增IP总数: $total_added 条"
           echo "更新文件列表:"
-          for file in "${!file_changes[@]}"; do
-            if [ "${file_changes[$file]}" -gt 0 ]; then
-              echo "  - $file: +${file_changes[$file]} 条"
-            fi
+          for file in "${!file_added[@]}"; do
+            echo "  - $file: +${file_added[$file]} 条"
           done
           echo "====================================="
 
