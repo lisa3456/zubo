@@ -26,624 +26,614 @@ jobs:
     - name: 提取ip_port
       run: |
         cat > hotel_ip_port.py << 'EOF'
-        import requests
-        import re
-        import os
-        import random
-        import time
-        import json
-        import socket
-        import threading
-        from urllib.parse import urlparse, urljoin
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+import requests
+import re
+import os
+import random
+import time
+import json
+import socket
+import threading
+from urllib.parse import urlparse, urljoin
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# 请求头设置
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': '*/*',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Connection': 'keep-alive',
+    'Accept-Encoding': 'gzip, deflate',
+}
+
+def check_tcp_connection(ip, port, timeout=3):
+    """测试TCP连接是否可用"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        result = sock.connect_ex((ip, int(port)))
+        sock.close()
+        return result == 0
+    except:
+        return False
+
+def check_ip_availability(ip_port, timeout=5):
+    """检测IP:端口是否可用"""
+    try:
+        ip, port = ip_port.split(':')
         
-        # 请求头设置
-        HEADERS = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': '*/*',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Connection': 'keep-alive',
-            'Accept-Encoding': 'gzip, deflate',
-        }
+        # 先测试TCP连接
+        if not check_tcp_connection(ip, port, timeout=2):
+            print(f"  {ip_port}: TCP连接失败")
+            return False, None
         
-        def check_tcp_connection(ip, port, timeout=3):
-            """测试TCP连接是否可用"""
+        print(f"  {ip_port}: TCP连接成功")
+        
+        # 尝试连接HTTP服务
+        test_urls = [
+            f"http://{ip_port}/iptv/live/1000.json?key=txiptv",
+            f"http://{ip_port}/ZHGXTV/Public/json/live_interface.txt",
+            f"http://{ip_port}/",  # 根目录
+            f"http://{ip_port}/iptv/live/",  # iptv目录
+            f"http://{ip_port}/ZHGXTV/Public/json/"  # ZHGXTV目录
+        ]
+        
+        session = requests.Session()
+        
+        for url in test_urls:
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(timeout)
-                result = sock.connect_ex((ip, int(port)))
-                sock.close()
-                return result == 0
+                response = session.get(url, timeout=timeout, headers=HEADERS, verify=False)
+                print(f"  {ip_port}: 尝试 {url} - 状态码: {response.status_code}")
+                
+                if response.status_code == 200:
+                    # 检查内容类型
+                    content_type = response.headers.get('Content-Type', '')
+                    content = response.text[:100]  # 只取前100个字符
+                    
+                    # JSON接口检测
+                    if "1000.json" in url or "json" in content_type.lower():
+                        try:
+                            json_data = response.json()
+                            if "data" in json_data or "code" in json_data:
+                                print(f"  {ip_port}: JSON接口可用")
+                                return True, f"http://{ip_port}/iptv/live/1000.json?key=txiptv"
+                        except:
+                            pass
+                    
+                    # TXT接口检测
+                    if "live_interface.txt" in url or "txt" in content_type.lower() or ("CCTV" in content and "," in content):
+                        print(f"  {ip_port}: TXT接口可用")
+                        return True, f"http://{ip_port}/ZHGXTV/Public/json/live_interface.txt"
+                    
+                    # 其他成功的HTTP响应
+                    if response.status_code == 200 and len(response.content) > 0:
+                        print(f"  {ip_port}: HTTP服务可用 (URL: {url})")
+                        # 尝试判断是哪种接口
+                        if "iptv" in url:
+                            return True, f"http://{ip_port}/iptv/live/1000.json?key=txiptv"
+                        elif "ZHGXTV" in url:
+                            return True, f"http://{ip_port}/ZHGXTV/Public/json/live_interface.txt"
+                        else:
+                            # 返回第一个可用的URL
+                            return True, url
+                            
+            except requests.exceptions.ConnectionError:
+                continue
+            except requests.exceptions.Timeout:
+                continue
+            except Exception as e:
+                continue
+        
+        print(f"  {ip_port}: 所有接口测试失败")
+        return False, None
+        
+    except Exception as e:
+        print(f"  {ip_port}: 检测异常 - {str(e)[:50]}")
+        return False, None
+
+def hotel_channels_from_ip_port(ip_port, interface_url):
+    """
+    从IP:端口的接口解析频道信息
+    返回频道列表 [(频道名称, 频道URL), ...]
+    """
+    hotel_channels = []
+    try:
+        # 发送GET请求获取数据
+        response = requests.get(interface_url, timeout=10, headers=HEADERS, verify=False)
+        
+        # 根据接口类型处理
+        if "iptv" in interface_url or "json" in interface_url:
+            # 处理JSON格式
+            try:
+                json_data = response.json()
+                
+                # 检查不同的JSON格式
+                if isinstance(json_data, dict):
+                    # 格式1: {"data": [...]}
+                    if "data" in json_data and isinstance(json_data["data"], list):
+                        for item in json_data["data"]:
+                            if isinstance(item, dict):
+                                name = item.get('name', '') or item.get('channel_name', '') or item.get('title', '')
+                                urlx = item.get('url', '') or item.get('urlx', '') or item.get('stream_url', '')
+                                if name and urlx:
+                                    # 确保urlx以斜杠开头,避免双斜杠
+                                    if not urlx.startswith('/'):
+                                        urlx = '/' + urlx
+                                    urld = f"http://{ip_port}{urlx}"
+                                    hotel_channels.append((name, urld))
+                    
+                    # 格式2: 直接是列表
+                    elif isinstance(json_data, list):
+                        for item in json_data:
+                            if isinstance(item, dict):
+                                name = item.get('name', '') or item.get('channel_name', '') or item.get('title', '')
+                                urlx = item.get('url', '') or item.get('urlx', '') or item.get('stream_url', '')
+                                if name and urlx:
+                                    if not urlx.startswith('/'):
+                                        urlx = '/' + urlx
+                                    urld = f"http://{ip_port}{urlx}"
+                                    hotel_channels.append((name, urld))
+            except json.JSONDecodeError:
+                # 如果不是JSON，尝试按TXT格式处理
+                pass
+        
+        # 处理TXT格式
+        content = response.text
+        
+        # 尝试按行分割
+        lines = content.split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith('#') or ',' not in line:
+                continue
+            
+            parts = line.split(',', 1)
+            if len(parts) < 2:
+                continue
+            
+            name = parts[0].strip()
+            full_url = parts[1].strip()
+            
+            # 提取路径部分
+            parsed_url = urlparse(full_url)
+            path = parsed_url.path
+            if parsed_url.query:
+                path += '?' + parsed_url.query
+            
+            # 构建基于当前IP端口的URL
+            urld = f"http://{ip_port}{path}"
+            hotel_channels.append((name, urld))
+        
+        # 如果还没有找到频道，尝试其他格式
+        if not hotel_channels and "CCTV" in content and ("m3u8" in content or ".ts" in content):
+            # 尝试提取类似 "CCTV1,http://..." 的格式
+            pattern = r'([^,]+?CCTV[^,]*?),([^\s]+)'
+            matches = re.findall(pattern, content)
+            for name, url in matches:
+                parsed_url = urlparse(url.strip())
+                path = parsed_url.path
+                if parsed_url.query:
+                    path += '?' + parsed_url.query
+                urld = f"http://{ip_port}{path}"
+                hotel_channels.append((name.strip(), urld))
+        
+        return hotel_channels
+    except Exception as e:
+        print(f"解析频道错误 {interface_url}: {e}")
+        return []
+
+def smart_ts_detection(channel_url, max_wait=2):
+    """
+    智能TS分片检测 - 快测/详测共用（自适应参数）
+    快速检测传2秒，详细测速传5秒，强化断流检测
+    返回: (是否有流, TS分片URL列表, 速度KB/s)
+    """
+    try:
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        # 增加网络重试，排除临时波动
+        session.mount('http://', requests.adapters.HTTPAdapter(max_retries=2))
+        session.mount('https://', requests.adapters.HTTPAdapter(max_retries=2))
+
+        # 获取M3U8内容
+        m3u8_resp = session.get(channel_url, timeout=5, verify=False)
+        if m3u8_resp.status_code != 200:
+            # 尝试直接下载流（非M3U8格式）
+            try:
+                start = time.time()
+                stream_resp = session.get(channel_url, timeout=max_wait, stream=True, verify=False)
+                if stream_resp.status_code == 200:
+                    bytes_downloaded = 0
+                    chunk_count = 0
+                    for chunk in stream_resp.iter_content(chunk_size=8192):
+                        if chunk:
+                            bytes_downloaded += len(chunk)
+                            chunk_count += 1
+                            # 按时长/阈值截断：快测128KB，详测256KB
+                            if time.time() - start >= max_wait or bytes_downloaded >= (256 if max_wait>=5 else 128) * 1024:
+                                break
+                    # 断流硬判断：无有效数据直接判定断流
+                    if bytes_downloaded < 512 or chunk_count < 2:
+                        return False, [], 0
+                    elapsed = time.time() - start
+                    if elapsed > 0 and bytes_downloaded > 0:
+                        speed = (bytes_downloaded / 1024) / elapsed
+                        return True, [channel_url], speed
             except:
-                return False
-        
-        def check_ip_availability(ip_port, timeout=5):
-            """检测IP:端口是否可用"""
-            try:
-                ip, port = ip_port.split(':')
-                
-                # 先测试TCP连接
-                if not check_tcp_connection(ip, port, timeout=2):
-                    print(f"  {ip_port}: TCP连接失败")
-                    return False, None
-                
-                print(f"  {ip_port}: TCP连接成功")
-                
-                # 尝试连接HTTP服务
-                test_urls = [
-                    f"http://{ip_port}/iptv/live/1000.json?key=txiptv",
-                    f"http://{ip_port}/ZHGXTV/Public/json/live_interface.txt",
-                    f"http://{ip_port}/",  # 根目录
-                    f"http://{ip_port}/iptv/live/",  # iptv目录
-                    f"http://{ip_port}/ZHGXTV/Public/json/"  # ZHGXTV目录
-                ]
-                
-                session = requests.Session()
-                
-                for url in test_urls:
+                pass
+            return False, [], 0
+
+        m3u8_content = m3u8_resp.text
+
+        # 构建基础URL
+        if '/' in channel_url:
+            base_url = channel_url.rsplit('/', 1)[0] + '/'
+        else:
+            base_url = channel_url + '/'
+
+        # 递归解析所有TS分片
+        def extract_all_ts(content, current_base):
+            ts_list = []
+            lines = content.strip().split('\n')
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if line.endswith('.ts') or '.ts?' in line:
+                    ts_list.append(line if line.startswith('http') else current_base + line)
+                elif line.endswith('.m3u8'):
                     try:
-                        response = session.get(url, timeout=timeout, headers=HEADERS, verify=False)
-                        print(f"  {ip_port}: 尝试 {url} - 状态码: {response.status_code}")
-                        
-                        if response.status_code == 200:
-                            # 检查内容类型
-                            content_type = response.headers.get('Content-Type', '')
-                            content = response.text[:100]  # 只取前100个字符
-                            
-                            # JSON接口检测
-                            if "1000.json" in url or "json" in content_type.lower():
-                                try:
-                                    json_data = response.json()
-                                    if "data" in json_data or "code" in json_data:
-                                        print(f"  {ip_port}: JSON接口可用")
-                                        return True, f"http://{ip_port}/iptv/live/1000.json?key=txiptv"
-                                except:
-                                    pass
-                            
-                            # TXT接口检测
-                            if "live_interface.txt" in url or "txt" in content_type.lower() or ("CCTV" in content and "," in content):
-                                print(f"  {ip_port}: TXT接口可用")
-                                return True, f"http://{ip_port}/ZHGXTV/Public/json/live_interface.txt"
-                            
-                            # 其他成功的HTTP响应
-                            if response.status_code == 200 and len(response.content) > 0:
-                                print(f"  {ip_port}: HTTP服务可用 (URL: {url})")
-                                # 尝试判断是哪种接口
-                                if "iptv" in url:
-                                    return True, f"http://{ip_port}/iptv/live/1000.json?key=txiptv"
-                                elif "ZHGXTV" in url:
-                                    return True, f"http://{ip_port}/ZHGXTV/Public/json/live_interface.txt"
-                                else:
-                                    # 返回第一个可用的URL
-                                    return True, url
-                                    
-                    except requests.exceptions.ConnectionError:
-                        continue
-                    except requests.exceptions.Timeout:
-                        continue
-                    except Exception as e:
-                        continue
-                
-                print(f"  {ip_port}: 所有接口测试失败")
-                return False, None
-                
-            except Exception as e:
-                print(f"  {ip_port}: 检测异常 - {str(e)[:50]}")
-                return False, None
-        
-        def hotel_channels_from_ip_port(ip_port, interface_url):
-            """
-            从IP:端口的接口解析频道信息
-            返回频道列表 [(频道名称, 频道URL), ...]
-            """
-            hotel_channels = []
-            try:
-                # 发送GET请求获取数据
-                response = requests.get(interface_url, timeout=10, headers=HEADERS, verify=False)
-                
-                # 根据接口类型处理
-                if "iptv" in interface_url or "json" in interface_url:
-                    # 处理JSON格式
-                    try:
-                        json_data = response.json()
-                        
-                        # 检查不同的JSON格式
-                        if isinstance(json_data, dict):
-                            # 格式1: {"data": [...]}
-                            if "data" in json_data and isinstance(json_data["data"], list):
-                                for item in json_data["data"]:
-                                    if isinstance(item, dict):
-                                        name = item.get('name', '') or item.get('channel_name', '') or item.get('title', '')
-                                        urlx = item.get('url', '') or item.get('urlx', '') or item.get('stream_url', '')
-                                        if name and urlx:
-                                            # 确保urlx以斜杠开头,避免双斜杠
-                                            if not urlx.startswith('/'):
-                                                urlx = '/' + urlx
-                                            urld = f"http://{ip_port}{urlx}"
-                                            hotel_channels.append((name, urld))
-                            
-                            # 格式2: 直接是列表
-                            elif isinstance(json_data, list):
-                                for item in json_data:
-                                    if isinstance(item, dict):
-                                        name = item.get('name', '') or item.get('channel_name', '') or item.get('title', '')
-                                        urlx = item.get('url', '') or item.get('urlx', '') or item.get('stream_url', '')
-                                        if name and urlx:
-                                            if not urlx.startswith('/'):
-                                                urlx = '/' + urlx
-                                            urld = f"http://{ip_port}{urlx}"
-                                            hotel_channels.append((name, urld))
-                    except json.JSONDecodeError:
-                        # 如果不是JSON，尝试按TXT格式处理
-                        pass
-                
-                # 处理TXT格式
-                content = response.text
-                
-                # 尝试按行分割
-                lines = content.split('\n')
-                for line in lines:
-                    line = line.strip()
-                    if not line or line.startswith('#') or ',' not in line:
-                        continue
-                    
-                    parts = line.split(',', 1)
-                    if len(parts) < 2:
-                        continue
-                    
-                    name = parts[0].strip()
-                    full_url = parts[1].strip()
-                    
-                    # 提取路径部分
-                    parsed_url = urlparse(full_url)
-                    path = parsed_url.path
-                    if parsed_url.query:
-                        path += '?' + parsed_url.query
-                    
-                    # 构建基于当前IP端口的URL
-                    urld = f"http://{ip_port}{path}"
-                    hotel_channels.append((name, urld))
-                
-                # 如果还没有找到频道，尝试其他格式
-                if not hotel_channels and "CCTV" in content and ("m3u8" in content or ".ts" in content):
-                    # 尝试提取类似 "CCTV1,http://..." 的格式
-                    pattern = r'([^,]+?CCTV[^,]*?),([^\s]+)'
-                    matches = re.findall(pattern, content)
-                    for name, url in matches:
-                        parsed_url = urlparse(url.strip())
-                        path = parsed_url.path
-                        if parsed_url.query:
-                            path += '?' + parsed_url.query
-                        urld = f"http://{ip_port}{path}"
-                        hotel_channels.append((name.strip(), urld))
-                
-                return hotel_channels
-            except Exception as e:
-                print(f"解析频道错误 {interface_url}: {e}")
-                return []
-        
-        def smart_ts_detection(channel_url, max_wait=3):
-            """
-            智能TS分片检测 - 增强版，支持嵌套M3U8和直接流
-            返回: (是否有流, TS分片URL列表, 速度KB/s)
-            """
-            try:
-                session = requests.Session()
-                session.headers.update(HEADERS)
-                
-                # 获取M3U8内容
-                m3u8_resp = session.get(channel_url, timeout=5, verify=False)
-                if m3u8_resp.status_code != 200:
-                    # 尝试直接下载流（非M3U8格式）
-                    try:
-                        start = time.time()
-                        stream_resp = session.get(channel_url, timeout=3, stream=True, verify=False)
-                        if stream_resp.status_code == 200:
-                            bytes_downloaded = 0
-                            for chunk in stream_resp.iter_content(chunk_size=8192):
-                                if chunk:
-                                    bytes_downloaded += len(chunk)
-                                    if bytes_downloaded >= 128 * 1024:
-                                        break
-                            elapsed = time.time() - start
-                            if elapsed > 0 and bytes_downloaded > 0:
-                                speed = (bytes_downloaded / 1024) / elapsed
-                                return True, [channel_url], speed
+                        nested_url = line if line.startswith('http') else current_base + line
+                        nested_resp = session.get(nested_url, timeout=3, verify=False)
+                        if nested_resp.status_code == 200:
+                            nested_base = nested_url.rsplit('/', 1)[0] + '/'
+                            ts_list.extend(extract_all_ts(nested_resp.text, nested_base))
                     except:
                         pass
-                    return False, [], 0
-                
-                m3u8_content = m3u8_resp.text
-                
-                # 构建基础URL
-                if '/' in channel_url:
-                    base_url = channel_url.rsplit('/', 1)[0] + '/'
-                else:
-                    base_url = channel_url + '/'
-                
-                # 递归解析所有TS分片
-                def extract_all_ts(content, current_base):
-                    ts_list = []
-                    lines = content.strip().split('\n')
-                    
-                    for line in lines:
-                        line = line.strip()
-                        if not line or line.startswith('#'):
-                            continue
-                        
-                        # 如果是TS文件
-                        if line.endswith('.ts') or '.ts?' in line:
-                            if line.startswith('http'):
-                                ts_list.append(line)
-                            else:
-                                ts_list.append(current_base + line)
-                        
-                        # 如果是嵌套的M3U8
-                        elif line.endswith('.m3u8'):
-                            try:
-                                if line.startswith('http'):
-                                    nested_url = line
-                                else:
-                                    nested_url = current_base + line
-                                
-                                nested_resp = session.get(nested_url, timeout=3, verify=False)
-                                if nested_resp.status_code == 200:
-                                    nested_base = nested_url.rsplit('/', 1)[0] + '/'
-                                    nested_ts = extract_all_ts(nested_resp.text, nested_base)
-                                    ts_list.extend(nested_ts)
-                            except:
-                                pass
-                    
-                    return ts_list
-                
-                ts_urls = extract_all_ts(m3u8_content, base_url)
-                
-                if not ts_urls:
-                    # 没有TS分片，但可能是直接流
-                    return True, [channel_url], 50.0
-                
-                # 测试前2个TS分片的速度
-                total_bytes = 0
-                total_time = 0
-                success_count = 0
-                
-                for ts_url in ts_urls[:2]:
-                    try:
-                        start = time.time()
-                        ts_resp = session.get(ts_url, timeout=3, stream=True, verify=False)
-                        if ts_resp.status_code == 200:
-                            bytes_downloaded = 0
-                            for chunk in ts_resp.iter_content(chunk_size=8192):
-                                if chunk:
-                                    bytes_downloaded += len(chunk)
-                                    if bytes_downloaded >= 128 * 1024:
-                                        break
-                            
-                            elapsed = time.time() - start
-                            if elapsed > 0 and bytes_downloaded > 0:
-                                total_bytes += bytes_downloaded
-                                total_time += elapsed
-                                success_count += 1
-                    except:
-                        pass
-                
-                if success_count > 0 and total_time > 0:
-                    speed = (total_bytes / 1024) / total_time
-                    return True, ts_urls, speed
-                elif ts_urls:
-                    # 找到了TS分片但测速失败，给一个基础速度
-                    return True, ts_urls, 50.0
-                else:
-                    return False, [], 0
-                    
-            except Exception as e:
-                return False, [], 0
-        
-        def quick_stream_check(channel_url, min_speed=30):
-            """
-            快速检测（1-2秒完成）- 增强版
-            返回: (是否可用, 速度KB/s, 简要诊断)
-            """
+            return ts_list
+
+        ts_urls = extract_all_ts(m3u8_content, base_url)
+        if not ts_urls:
+            return True, [channel_url], 50.0
+
+        # 自适应参数：快测2分片，详测3分片；统一断流阈值512B
+        test_ts_num = 3 if max_wait >=5 else 2
+        total_bytes = 0
+        total_time = 0
+        success_count = 0
+        MIN_CHUNK_SIZE = 512
+        max_download = 256 if max_wait>=5 else 128
+
+        for ts_url in ts_urls[:test_ts_num]:
             try:
-                # 使用智能TS检测
-                has_stream, urls, speed = smart_ts_detection(channel_url, max_wait=2)
-                
-                if has_stream:
-                    # 找到了流数据
-                    if speed >= min_speed:
-                        return True, round(speed, 2), f"速度达标 ({speed:.0f} KB/s)"
-                    elif speed > 0:
-                        # 速度不足但仍然可用（降低标准）
-                        return True, round(speed, 2), f"速度偏低 ({speed:.0f} KB/s)"
-                    else:
-                        # 有流但速度测试异常，仍然认为可用
-                        return True, 30.0, "流可用，速度测试异常"
-                else:
-                    return False, 0, "无法获取流"
-                    
-            except Exception as e:
-                return False, 0, f"检测失败: {str(e)[:20]}"
-        
-        def test_stream_speed_optimized(channel_url, max_test_time=3):
-            """
-            优化版测速 - 增强版
-            返回: (速度KB/s, 是否稳定, 质量评分)
-            """
-            try:
-                has_stream, urls, speed = smart_ts_detection(channel_url, max_wait=max_test_time)
-                
-                if not has_stream:
-                    return 0.0, False, 0
-                
-                # 根据速度判断质量（降低标准）
-                if speed >= 200:
-                    quality = 90
-                    stable = True
-                elif speed >= 100:
-                    quality = 75
-                    stable = True
-                elif speed >= 50:
-                    quality = 65
-                    stable = True
-                elif speed >= 30:
-                    quality = 55
-                    stable = False
-                elif speed > 0:
-                    quality = 45
-                    stable = False
-                else:
-                    # 速度测试失败但找到了流，给一个基础分
-                    quality = 50
-                    stable = False
-                    speed = 30.0
-                
-                # 如果有多个TS分片，提高质量分
-                if len(urls) >= 5:
-                    quality += 10
-                elif len(urls) >= 3:
-                    quality += 5
-                
-                return round(speed, 2), stable, min(100, quality)
-                
-            except Exception as e:
-                return 0.0, False, 0
-        
-        def batch_stream_test(ip_port, channels, max_test_time=3):
-            """
-            批量测试频道的速度和稳定性
-            返回: (最佳速度, 是否稳定, 最佳质量评分, 测试数量)
-            """
-            best_speed = 0
-            best_stable = False
-            best_quality = 0
-            tested = 0
+                start = time.time()
+                ts_resp = session.get(ts_url, timeout=max_wait, stream=True, verify=False)
+                if ts_resp.status_code == 200:
+                    bytes_downloaded = 0
+                    for chunk in ts_resp.iter_content(chunk_size=8192):
+                        if chunk:
+                            bytes_downloaded += len(chunk)
+                            if time.time() - start >= max_wait or bytes_downloaded >= max_download * 1024:
+                                break
+                    # 过滤空分片/断流分片
+                    if bytes_downloaded < MIN_CHUNK_SIZE:
+                        continue
+                    elapsed = time.time() - start
+                    if elapsed > 0 and bytes_downloaded > 0:
+                        total_bytes += bytes_downloaded
+                        total_time += elapsed
+                        success_count += 1
+            except:
+                continue
+
+        # 断流判定：快测成功≥1分片，详测成功≥2分片
+        if success_count < (2 if max_wait>=5 else 1):
+            return False, [], 0
+        if total_time > 0:
+            speed = (total_bytes / 1024) / total_time
+            return True, ts_urls, speed
+        else:
+            return True, ts_urls, 50.0
+
+    except Exception as e:
+        return False, [], 0
+
+def quick_stream_check(channel_url, min_speed=30):
+    """
+    快速检测 - 固定2秒（轻量断流过滤，只筛明显无效流）
+    返回: (是否可用, 速度KB/s, 简要诊断)
+    """
+    try:
+        # 强制2秒快测，轻量检测
+        has_stream, urls, speed = smart_ts_detection(channel_url, max_wait=2)
+        if has_stream:
+            if speed >= min_speed:
+                return True, round(speed, 2), f"速度达标 ({speed:.0f} KB/s)"
+            elif speed > 0:
+                return True, round(speed, 2), f"速度偏低 ({speed:.0f} KB/s)"
+            else:
+                return True, 30.0, "流可用，速度测试异常"
+        else:
+            return False, 0, "检测到断流/无有效流数据"
+    except Exception as e:
+        return False, 0, f"检测失败: {str(e)[:20]}"
+
+def test_stream_speed_optimized(channel_url, max_test_time=5):
+    """
+    详细测速 - 固定5秒（深度断流检测+精准测速，仅对快测通过的频道执行）
+    返回: (速度KB/s, 是否稳定, 质量评分)
+    """
+    try:
+        # 强制5秒详测，深度检测
+        has_stream, urls, speed = smart_ts_detection(channel_url, max_wait=5)
+        if not has_stream:
+            return 0.0, False, 0
+
+        # 质量评分规则：强化断流权重，适配实际播放体验
+        if speed >= 150:
+            quality = 90
+            stable = True
+        elif speed >= 80:
+            quality = 75
+            stable = True
+        elif speed >= 40:
+            quality = 65
+            stable = True
+        elif speed >= 30:
+            quality = 55
+            stable = False
+        elif speed > 0:
+            quality = 45
+            stable = False
+        else:
+            quality = 50
+            stable = False
+            speed = 30.0
+
+        # 分片数量+断流无异常 加分，评分不超100
+        if len(urls) >= 6:
+            quality += 10
+        elif len(urls) >= 4:
+            quality += 5
+        # 详测3分片无断流，额外加5分
+        if len(urls)>=3 and has_stream and max_test_time>=5:
+            quality +=5
+
+        return round(speed, 2), stable, min(100, quality)
+    except Exception as e:
+        return 0.0, False, 0
+
+def batch_stream_test(ip_port, channels, max_test_time=5):
+    """
+    批量测试频道 - 2秒快测过滤→5秒详测深度检测，兼顾效率和准确性
+    返回: (最佳速度, 是否稳定, 最佳质量评分, 测试数量)
+    """
+    best_speed = 0
+    best_stable = False
+    best_quality = 0
+    tested = 0
+
+    # 优先测试CCTV1等核心频道，提升测速代表性
+    priority_channels = []
+    other_channels = []
+    for name, url in channels[:5]:
+        if name.upper() in ['CCTV-1', 'CCTV1', 'CCTV-1综合']:
+            priority_channels.insert(0, (name, url))
+        elif 'CCTV' in name.upper():
+            priority_channels.append((name, url))
+        else:
+            other_channels.append((name, url))
+    test_channels = priority_channels + other_channels
+
+    # 最多测试3个频道，平衡效率和检测全面性
+    for channel_name, channel_url in test_channels[:3]:
+        tested += 1
+        # 2秒快测先过滤明显断流/无效流
+        available, speed, diagnosis = quick_stream_check(channel_url, min_speed=30)
+        if not available:
+            print(f"      {channel_name}: 快速检测失败 - {diagnosis}")
+            continue
+        print(f"      {channel_name}: 快速检测通过 ({speed:.0f} KB/s)，详细测速中...")
+        # 5秒详测深度检测断流+精准测速
+        speed, is_stable, quality = test_stream_speed_optimized(channel_url, max_test_time)
+        # 质量分优先，其次速度，更新最佳结果
+        if quality > best_quality or (quality == best_quality and speed > best_speed):
+            best_speed = speed
+            best_stable = is_stable
+            best_quality = quality
+        # 优质流提前结束，减少耗时（质量≥75分即为稳定可用）
+        if quality >= 75:
+            break
+    return best_speed, best_stable, best_quality, tested
+
+def hotel_ip_port_from_urls(url_list):
+    """
+    从给定的URL列表中读取直播源文件，提取包含"tsfile"或"hls"的IP和端口
+    然后检测IP端口有效性，解析频道，测速，最终保存有效的IP端口
+    """
+    ip_port_set = set()  # 使用集合自动去重
+    
+    print("步骤1: 从直播源URL提取IP和端口...")
+    for url in url_list:
+        try:
+            response = requests.get(url, timeout=15, headers=HEADERS, verify=False)
+            response.raise_for_status()
+            lines = response.text.splitlines()
             
-            # 优先测试CCTV1等主要频道
-            priority_channels = []
-            other_channels = []
-            
-            for name, url in channels[:5]:
-                if name.upper() in ['CCTV-1', 'CCTV1', 'CCTV-1综合']:
-                    priority_channels.insert(0, (name, url))
-                elif 'CCTV' in name.upper():
-                    priority_channels.append((name, url))
-                else:
-                    other_channels.append((name, url))
-            
-            test_channels = priority_channels + other_channels
-            
-            for channel_name, channel_url in test_channels[:3]:
-                tested += 1
-                
-                # 先用快速检测过滤
-                available, speed, diagnosis = quick_stream_check(channel_url, min_speed=30)
-                if not available:
-                    print(f"      {channel_name}: 快速检测失败 - {diagnosis}")
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith('#') or ',' not in line:
                     continue
                 
-                print(f"      {channel_name}: 快速检测通过 ({speed:.0f} KB/s)，详细测速中...")
+                parts = line.split(',', 1)
+                if len(parts) < 2:
+                    continue
                 
-                # 对通过的进行详细测速
-                speed, is_stable, quality = test_stream_speed_optimized(channel_url, max_test_time)
-                
-                # 更新最佳结果
-                if quality > best_quality or (quality == best_quality and speed > best_speed):
-                    best_speed = speed
-                    best_stable = is_stable
-                    best_quality = quality
-                
-                # 如果找到优秀质量的流，提前结束
-                if quality >= 70:
-                    break
+                url_part = parts[1].strip()
+                # 提取IP和端口（不限制文件类型）
+                match = re.search(r'https?://([^:/]+):(\d+)', url_part)
+                if match:
+                    ip = match.group(1)
+                    port = match.group(2)
+                    # 只保留公网IP，过滤内网IP
+                    if not ip.startswith(('10.', '172.16.', '192.168.', '127.')):
+                        ip_port_set.add(f"{ip}:{port}")
             
-            return best_speed, best_stable, best_quality, tested
+            print(f"  从 {url} 提取完成")
+            
+        except Exception as e:
+            print(f"处理URL {url} 时发生错误: {e}")
+    
+    print(f"共提取到 {len(ip_port_set)} 个IP:端口")
+    
+    # 转换为列表
+    ip_port_list = list(ip_port_set)
+    
+    print(f"\n步骤2: 检测IP端口有效性...")
+    available_ips = []
+    
+    # 使用线程池并发检测，提升效率
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_ip = {executor.submit(check_ip_availability, ip_port): ip_port for ip_port in ip_port_list}
         
-        def hotel_ip_port_from_urls(url_list):
-            """
-            从给定的URL列表中读取直播源文件，提取包含"tsfile"或"hls"的IP和端口
-            然后检测IP端口有效性，解析频道，测速，最终保存有效的IP端口
-            """
-            ip_port_set = set()  # 使用集合自动去重
+        for future in as_completed(future_to_ip):
+            ip_port = future_to_ip[future]
+            try:
+                is_available, interface_url = future.result()
+                if is_available:
+                    available_ips.append((ip_port, interface_url))
+                    print(f"  ✓ {ip_port} 可用 (接口: {interface_url})")
+                else:
+                    print(f"  ✗ {ip_port} 不可用")
+            except Exception as e:
+                print(f"检测 {ip_port} 时出错: {e}")
+    
+    print(f"\n共 {len(available_ips)} 个IP:端口可用")
+    
+    if not available_ips:
+        print("警告: 没有找到可用的IP端口，直接使用所有提取的IP端口")
+        # 如果都没有可用，直接使用所有IP端口，假设它们都是可用的
+        for ip_port in ip_port_list:
+            # 假设都是iptv接口
+            available_ips.append((ip_port, f"http://{ip_port}/iptv/live/1000.json?key=txiptv"))
+        print(f"将使用所有 {len(available_ips)} 个IP端口进行测试")
+    
+    print(f"\n步骤3: 从可用IP解析频道信息并测速...")
+    speed_tested_ips = []
+    
+    for idx, (ip_port, interface_url) in enumerate(available_ips, 1):
+        try:
+            print(f"  [{idx}/{len(available_ips)}] 处理 {ip_port}...")
             
-            print("步骤1: 从直播源URL提取IP和端口...")
-            for url in url_list:
-                try:
-                    response = requests.get(url, timeout=15, headers=HEADERS, verify=False)
-                    response.raise_for_status()
-                    lines = response.text.splitlines()
-                    
-                    for line in lines:
-                        line = line.strip()
-                        if not line or line.startswith('#') or ',' not in line:
-                            continue
-                        
-                        parts = line.split(',', 1)
-                        if len(parts) < 2:
-                            continue
-                        
-                        url_part = parts[1].strip()
-                        # 提取IP和端口（不限制文件类型）
-                        match = re.search(r'https?://([^:/]+):(\d+)', url_part)
-                        if match:
-                            ip = match.group(1)
-                            port = match.group(2)
-                            # 只保留公网IP
-                            if not ip.startswith(('10.', '172.16.', '192.168.', '127.')):
-                                ip_port_set.add(f"{ip}:{port}")
-                    
-                    print(f"  从 {url} 提取完成")
-                    
-                except Exception as e:
-                    print(f"处理URL {url} 时发生错误: {e}")
+            # 解析频道
+            channels = hotel_channels_from_ip_port(ip_port, interface_url)
             
-            print(f"共提取到 {len(ip_port_set)} 个IP:端口")
-            
-            # 转换为列表
-            ip_port_list = list(ip_port_set)
-            
-            print(f"\n步骤2: 检测IP端口有效性...")
-            available_ips = []
-            
-            # 使用线程池并发检测
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                future_to_ip = {executor.submit(check_ip_availability, ip_port): ip_port for ip_port in ip_port_list}
+            if not channels:
+                print(f"    {ip_port}: 无频道信息，尝试备用接口...")
+                # 尝试备用接口
+                if "iptv" in interface_url:
+                    alt_url = f"http://{ip_port}/ZHGXTV/Public/json/live_interface.txt"
+                else:
+                    alt_url = f"http://{ip_port}/iptv/live/1000.json?key=txiptv"
                 
-                for future in as_completed(future_to_ip):
-                    ip_port = future_to_ip[future]
-                    try:
-                        is_available, interface_url = future.result()
-                        if is_available:
-                            available_ips.append((ip_port, interface_url))
-                            print(f"  ✓ {ip_port} 可用 (接口: {interface_url})")
-                        else:
-                            print(f"  ✗ {ip_port} 不可用")
-                    except Exception as e:
-                        print(f"检测 {ip_port} 时出错: {e}")
+                channels = hotel_channels_from_ip_port(ip_port, alt_url)
             
-            print(f"\n共 {len(available_ips)} 个IP:端口可用")
+            if not channels:
+                print(f"    {ip_port}: 无频道信息")
+                continue
             
-            if not available_ips:
-                print("警告: 没有找到可用的IP端口，直接使用所有提取的IP端口")
-                # 如果都没有可用，直接使用所有IP端口，假设它们都是可用的
-                for ip_port in ip_port_list:
-                    # 假设都是iptv接口
-                    available_ips.append((ip_port, f"http://{ip_port}/iptv/live/1000.json?key=txiptv"))
-                print(f"将使用所有 {len(available_ips)} 个IP端口进行测试")
+            # 过滤包含"CCTV"的频道，优先测试主流频道
+            cctv_channels = [(name, url) for name, url in channels if "CCTV" in name.upper()]
             
-            print(f"\n步骤3: 从可用IP解析频道信息并测速...")
-            speed_tested_ips = []
+            if not cctv_channels:
+                print(f"    {ip_port}: 无CCTV频道，使用所有频道")
+                # 如果没有CCTV频道，使用所有频道
+                cctv_channels = channels
             
-            for idx, (ip_port, interface_url) in enumerate(available_ips, 1):
-                try:
-                    print(f"  [{idx}/{len(available_ips)}] 处理 {ip_port}...")
-                    
-                    # 解析频道
-                    channels = hotel_channels_from_ip_port(ip_port, interface_url)
-                    
-                    if not channels:
-                        print(f"    {ip_port}: 无频道信息，尝试备用接口...")
-                        # 尝试备用接口
-                        if "iptv" in interface_url:
-                            alt_url = f"http://{ip_port}/ZHGXTV/Public/json/live_interface.txt"
-                        else:
-                            alt_url = f"http://{ip_port}/iptv/live/1000.json?key=txiptv"
-                        
-                        channels = hotel_channels_from_ip_port(ip_port, alt_url)
-                    
-                    if not channels:
-                        print(f"    {ip_port}: 无频道信息")
-                        continue
-                    
-                    # 过滤包含"CCTV"的频道
-                    cctv_channels = [(name, url) for name, url in channels if "CCTV" in name.upper()]
-                    
-                    if not cctv_channels:
-                        print(f"    {ip_port}: 无CCTV频道，使用所有频道")
-                        # 如果没有CCTV频道，使用所有频道
-                        cctv_channels = channels
-                    
-                    print(f"    {ip_port}: 找到 {len(cctv_channels)} 个频道，开始测试...")
-                    
-                    # 批量测试（最多3个频道）
-                    best_speed, best_stable, best_quality, tested_count = batch_stream_test(
-                        ip_port, cctv_channels, max_test_time=3
-                    )
-                    
-                    if tested_count == 0:
-                        print(f"    {ip_port}: 所有频道测试失败")
-                        continue
-                    
-                    # 保留达标IP（降低标准：速度≥30 KB/s 或 质量≥40分）
-                    min_valid_speed = 30.0
-                    if best_speed >= min_valid_speed or best_quality >= 40:
-                        speed_tested_ips.append((ip_port, (best_speed, best_stable, best_quality)))
-                        stable_tag = "稳定" if best_stable else "不稳定"
-                        quality_tag = f"质量{best_quality}分"
-                        print(f"    {ip_port}: 通过测试 - {stable_tag}, 速度: {best_speed:.2f} KB/s, {quality_tag}")
-                    else:
-                        print(f"    {ip_port}: 测试失败 - 速度: {best_speed:.2f} KB/s, 质量: {best_quality}分")
-                        
-                except Exception as e:
-                    print(f"    {ip_port}: 处理失败 - {e}")
+            print(f"    {ip_port}: 找到 {len(cctv_channels)} 个频道，开始测试...")
             
-            # 排序逻辑：稳定流优先，同稳定性按速度降序
-            speed_tested_ips.sort(key=lambda x: (x[1][1], x[1][0]), reverse=True)
+            # 批量测试（2秒快测→5秒详测）
+            best_speed, best_stable, best_quality, tested_count = batch_stream_test(
+                ip_port, cctv_channels, max_test_time=5
+            )
             
-            print(f"\n步骤4: 保存通过测速的IP端口...")
+            if tested_count == 0:
+                print(f"    {ip_port}: 所有频道测试失败")
+                continue
             
-            # 保存到文件
-            output_dir = "Hotel/ip"
-            os.makedirs(output_dir, exist_ok=True)
-            output_file = os.path.join(output_dir, "hotel_ip.txt")
-            
-            with open(output_file, 'w', encoding='utf-8') as f:
-                for ip_port, (speed, stable, quality) in speed_tested_ips:
-                    f.write(f"{ip_port}\n")
-            
-            # 如果没有通过测速的，保存所有可用的IP端口
-            if not speed_tested_ips:
-                print("没有通过测速的IP端口，保存所有可用IP端口")
-                with open(output_file, 'w', encoding='utf-8') as f:
-                    for ip_port, _ in available_ips:
-                        f.write(f"{ip_port}  # 未通过真实播放测速\n")
-                speed_tested_ips = [(ip_port, (0, False, 0)) for ip_port, _ in available_ips]
-            
-            # 统计信息
-            print(f"\n" + "="*60)
-            print(f"处理完成统计 (基于真实播放速度测速):")
-            print(f"  - 初始提取IP端口: {len(ip_port_set)} 个")
-            print(f"  - TCP+HTTP可用IP端口: {len(available_ips)} 个")
-            print(f"  - 真实播放速度达标IP端口: {len(speed_tested_ips)} 个")
-            print(f"  - 稳定流畅流: {len([x for x in speed_tested_ips if x[1][1]])} 个")
-            print(f"  - 结果已保存到: {output_file}")
-            print("="*60)
-            
-            if speed_tested_ips:
-                print(f"\n真实播放速度达标IP端口 (稳定优先 → 速度降序):")
-                show_num = min(20, len(speed_tested_ips))
-                for i, (ip_port, (speed, stable, quality)) in enumerate(speed_tested_ips[:show_num], 1):
-                    stable_tag = "✅" if stable else "❌"
-                    print(f"  {i:2d}. {ip_port} - {stable_tag} 速度: {speed:.2f} KB/s 质量: {quality}分")
-                if len(speed_tested_ips) > 20:
-                    print(f"  ... 还有 {len(speed_tested_ips)-20} 个达标IP端口")
+            # 保留达标IP（降低标准：速度≥30 KB/s 或 质量≥40分，保证有效结果）
+            min_valid_speed = 30.0
+            if best_speed >= min_valid_speed or best_quality >= 40:
+                speed_tested_ips.append((ip_port, (best_speed, best_stable, best_quality)))
+                stable_tag = "稳定" if best_stable else "不稳定"
+                quality_tag = f"质量{best_quality}分"
+                print(f"    {ip_port}: 通过测试 - {stable_tag}, 速度: {best_speed:.2f} KB/s, {quality_tag}")
             else:
-                print("\n警告: 没有找到真实播放速度达标的IP端口")
-        
-        if __name__ == "__main__":
-            # 禁用SSL警告
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            
-            # 示例URL列表
-            urls = [
-                "https://raw.githubusercontent.com/jn950/live/refs/heads/main/tv/holive.m3u",
-                "https://raw.githubusercontent.com/whyun-pages/hotel-tvn/refs/heads/main/lives.txt",
-                "https://raw.githubusercontent.com/mzky/checklist/refs/heads/master/itvlist.m3u",
-                "https://github.com/adminouyang/TV-yjc/raw/refs/heads/main/Hotel/iptv.txt"
-            ]
-            
-            hotel_ip_port_from_urls(urls)
-        EOF
+                print(f"    {ip_port}: 测试失败 - 速度: {best_speed:.2f} KB/s, 质量: {best_quality}分")
+                
+        except Exception as e:
+            print(f"    {ip_port}: 处理失败 - {e}")
+    
+    # 排序逻辑：稳定流优先，同稳定性按速度降序，方便优先使用优质IP
+    speed_tested_ips.sort(key=lambda x: (x[1][1], x[1][0]), reverse=True)
+    
+    print(f"\n步骤4: 保存通过测速的IP端口...")
+    
+    # 保存到文件，创建目录（不存在则新建）
+    output_dir = "Hotel/ip"
+    os.makedirs(output_dir, exist_ok=True)
+    output_file = os.path.join(output_dir, "hotel_ip.txt")
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        for ip_port, (speed, stable, quality) in speed_tested_ips:
+            f.write(f"{ip_port}\n")
+    
+    # 如果没有通过测速的，保存所有可用的IP端口并标注
+    if not speed_tested_ips:
+        print("没有通过测速的IP端口，保存所有可用IP端口")
+        with open(output_file, 'w', encoding='utf-8') as f:
+            for ip_port, _ in available_ips:
+                f.write(f"{ip_port}  # 未通过真实播放测速\n")
+        speed_tested_ips = [(ip_port, (0, False, 0)) for ip_port, _ in available_ips]
+    
+    # 统计信息，清晰展示处理结果
+    print(f"\n" + "="*60)
+    print(f"处理完成统计 (基于真实播放速度测速):")
+    print(f"  - 初始提取IP端口: {len(ip_port_set)} 个")
+    print(f"  - TCP+HTTP可用IP端口: {len(available_ips)} 个")
+    print(f"  - 真实播放速度达标IP端口: {len(speed_tested_ips)} 个")
+    print(f"  - 稳定流畅流: {len([x for x in speed_tested_ips if x[1][1]])} 个")
+    print(f"  - 结果已保存到: {output_file}")
+    print("="*60)
+    
+    # 展示前20个优质IP，方便快速查看
+    if speed_tested_ips:
+        print(f"\n真实播放速度达标IP端口 (稳定优先 → 速度降序):")
+        show_num = min(20, len(speed_tested_ips))
+        for i, (ip_port, (speed, stable, quality)) in enumerate(speed_tested_ips[:show_num], 1):
+            stable_tag = "✅" if stable else "❌"
+            print(f"  {i:2d}. {ip_port} - {stable_tag} 速度: {speed:.2f} KB/s 质量: {quality}分")
+        if len(speed_tested_ips) > 20:
+            print(f"  ... 还有 {len(speed_tested_ips)-20} 个达标IP端口")
+    else:
+        print("\n警告: 没有找到真实播放速度达标的IP端口")
+
+if __name__ == "__main__":
+    # 禁用SSL警告，避免HTTPS请求报错
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    
+    # 直播源URL列表，可根据需要自行添加/修改
+    urls = [
+        "https://raw.githubusercontent.com/jn950/live/refs/heads/main/tv/holive.m3u",
+        "https://raw.githubusercontent.com/whyun-pages/hotel-tvn/refs/heads/main/lives.txt",
+        "https://raw.githubusercontent.com/mzky/checklist/refs/heads/master/itvlist.m3u",
+        "https://github.com/adminouyang/TV-yjc/raw/refs/heads/main/Hotel/iptv.txt"
+    ]
+    
+    # 执行主逻辑
+    hotel_ip_port_from_urls(urls)
+EOF
         
         python hotel_ip_port.py
       
