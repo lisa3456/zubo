@@ -34,8 +34,17 @@ jobs:
           import json
           import socket
           import threading
+          import math
           from urllib.parse import urlparse, urljoin
           from concurrent.futures import ThreadPoolExecutor, as_completed
+          
+          # 测速配置项【可自定义】
+          DETECT_TIMEOUT = 5  # 总检测时长(秒)
+          TEST_TS_NUM = 3     # 测试分片数
+          MIN_SPEED = 30      # 平均速度达标阈值(KB/s)
+          MIN_TS_SPEED = 20   # 单个分片最小有效速度(KB/s)
+          SPEED_DEV_THRESH = 80  # 速度波动标准差阈值(越小越严格)
+          MAX_DOWNLOAD = 256  # 单分片最大下载量(KB)
           
           # 请求头设置
           HEADERS = {
@@ -192,8 +201,16 @@ jobs:
                   print(f"解析频道错误 {interface_url}: {e}")
                   return []
           
-          def smart_ts_detection(channel_url, max_wait=5):
-              """智能TS分片检测 - 合并后：固定5秒、3个分片"""
+          def calculate_standard_deviation(data):
+              """计算列表标准差（衡量速度波动）"""
+              if len(data) < 2:
+                  return 0.0
+              mean = sum(data) / len(data)
+              variance = sum((x - mean) ** 2 for x in data) / len(data)
+              return math.sqrt(variance)
+          
+          def smart_ts_detection(channel_url):
+              """智能TS分片检测 - 新增速度波动判定"""
               try:
                   session = requests.Session()
                   session.headers.update(HEADERS)
@@ -204,7 +221,7 @@ jobs:
                   if m3u8_resp.status_code != 200:
                       try:
                           start = time.time()
-                          stream_resp = session.get(channel_url, timeout=max_wait, stream=True, verify=False)
+                          stream_resp = session.get(channel_url, timeout=DETECT_TIMEOUT, stream=True, verify=False)
                           if stream_resp.status_code == 200:
                               bytes_downloaded = 0
                               chunk_count = 0
@@ -212,28 +229,24 @@ jobs:
                                   if chunk:
                                       bytes_downloaded += len(chunk)
                                       chunk_count += 1
-                                      if time.time() - start >= max_wait or bytes_downloaded >= 256 * 1024:
+                                      if time.time() - start >= DETECT_TIMEOUT or bytes_downloaded >= MAX_DOWNLOAD * 1024:
                                           break
                               if bytes_downloaded < 512 or chunk_count < 2:
-                                  return False, [], 0
+                                  return False, [], 0.0, 0.0, []
                               elapsed = time.time() - start
-                              if elapsed > 0 and bytes_downloaded > 0:
-                                  speed = (bytes_downloaded / 1024) / elapsed
-                                  return True, [channel_url], speed
+                              speed = (bytes_downloaded / 1024) / elapsed
+                              # 直连流默认波动为0
+                              return True, [channel_url], speed, 0.0, [speed]
                       except:
                           pass
-                      return False, [], 0
+                      return False, [], 0.0, 0.0, []
                   
                   m3u8_content = m3u8_resp.text
-                  if '/' in channel_url:
-                      base_url = channel_url.rsplit('/', 1)[0] + '/'
-                  else:
-                      base_url = channel_url + '/'
+                  base_url = channel_url.rsplit('/', 1)[0] + '/' if '/' in channel_url else channel_url + '/'
                   
                   def extract_all_ts(content, current_base):
                       ts_list = []
-                      lines = content.strip().split('\n')
-                      for line in lines:
+                      for line in content.strip().split('\n'):
                           line = line.strip()
                           if not line or line.startswith('#'):
                               continue
@@ -244,96 +257,102 @@ jobs:
                                   nested_url = line if line.startswith('http') else current_base + line
                                   nested_resp = session.get(nested_url, timeout=3, verify=False)
                                   if nested_resp.status_code == 200:
-                                      nested_base = nested_url.rsplit('/', 1)[0] + '/'
-                                      ts_list.extend(extract_all_ts(nested_resp.text, nested_base))
+                                      ts_list.extend(extract_all_ts(nested_resp.text, nested_url.rsplit('/', 1)[0] + '/'))
                               except:
                                   pass
                       return ts_list
                   
                   ts_urls = extract_all_ts(m3u8_content, base_url)
                   if not ts_urls:
-                      return True, [channel_url], 50.0
+                      return True, [channel_url], 50.0, 0.0, [50.0]
                   
-                  test_ts_num = 3  # 固定3个分片测试
-                  total_bytes = 0
-                  total_time = 0
-                  success_count = 0
+                  ts_speeds = []
+                  total_start = time.time()
                   MIN_CHUNK_SIZE = 512
-                  max_download = 256  # 5秒对应最大下载256KB
                   
-                  for ts_url in ts_urls[:test_ts_num]:
+                  # 遍历测试前N个分片
+                  for ts_url in ts_urls[:TEST_TS_NUM]:
+                      # 总时长超了直接终止
+                      if time.time() - total_start >= DETECT_TIMEOUT:
+                          break
                       try:
                           start = time.time()
-                          ts_resp = session.get(ts_url, timeout=max_wait, stream=True, verify=False)
+                          ts_resp = session.get(ts_url, timeout=DETECT_TIMEOUT, stream=True, verify=False)
                           if ts_resp.status_code == 200:
                               bytes_downloaded = 0
                               for chunk in ts_resp.iter_content(chunk_size=8192):
                                   if chunk:
                                       bytes_downloaded += len(chunk)
-                                      if time.time() - start >= max_wait or bytes_downloaded >= max_download * 1024:
+                                      if time.time() - start >= DETECT_TIMEOUT or bytes_downloaded >= MAX_DOWNLOAD * 1024:
                                           break
                               if bytes_downloaded < MIN_CHUNK_SIZE:
                                   continue
                               elapsed = time.time() - start
-                              if elapsed > 0 and bytes_downloaded > 0:
-                                  total_bytes += bytes_downloaded
-                                  total_time += elapsed
-                                  success_count += 1
+                              if elapsed <= 0:
+                                  continue
+                              speed = (bytes_downloaded / 1024) / elapsed
+                              ts_speeds.append(round(speed, 2))
                       except:
                           continue
                   
-                  if success_count < 1:  # 至少1个分片成功即有效
-                      return False, [], 0
-                  if total_time > 0:
-                      speed = (total_bytes / 1024) / total_time
-                      return True, ts_urls, speed
-                  else:
-                      return True, ts_urls, 50.0
-              except Exception as e:
-                  return False, [], 0
-          
-          def merged_stream_test(channel_url, min_speed=30):
-              """合并后的测速方法：5秒+3分片+≥30KB/s判定"""
-              try:
-                  has_stream, urls, speed = smart_ts_detection(channel_url, max_wait=5)
-                  if not has_stream or speed < min_speed:
-                      return False, 0.0, False, 0, "速度<30KB/s或流不可用"
+                  if len(ts_speeds) < 1:
+                      return False, [], 0.0, 0.0, []
                   
-                  # 质量分和稳定性判定
-                  if speed >= 150:
-                      quality = 90
+                  # 计算平均速度和波动标准差
+                  avg_speed = round(sum(ts_speeds) / len(ts_speeds), 2)
+                  speed_dev = round(calculate_standard_deviation(ts_speeds), 2)
+                  return True, ts_urls, avg_speed, speed_dev, ts_speeds
+              except Exception as e:
+                  return False, [], 0.0, 0.0, []
+          
+          def merged_stream_test(channel_url):
+              """合并后的测速方法：含速度波动判定"""
+              try:
+                  has_stream, urls, avg_speed, speed_dev, ts_speeds = smart_ts_detection(channel_url)
+                  # 多条件同时达标：流可用+平均速度≥阈值+无低速度分片+波动≤阈值
+                  if not has_stream:
+                      return False, 0.0, False, 0, "流不可用", 0.0, []
+                  if avg_speed < MIN_SPEED:
+                      return False, avg_speed, False, 0, f"平均速度{avg_speed}KB/s＜{MIN_SPEED}KB/s", speed_dev, ts_speeds
+                  if any(s < MIN_TS_SPEED for s in ts_speeds):
+                      return False, avg_speed, False, 0, f"存在分片速度＜{MIN_TS_SPEED}KB/s(断连)", speed_dev, ts_speeds
+                  if speed_dev > SPEED_DEV_THRESH:
+                      return False, avg_speed, False, 0, f"速度波动过大(标准差{speed_dev}＞{SPEED_DEV_THRESH})", speed_dev, ts_speeds
+                  
+                  # 质量分和稳定性判定（结合波动）
+                  if avg_speed >= 150 and speed_dev <= 50:
+                      quality = 95
                       stable = True
-                  elif speed >= 80:
-                      quality = 75
+                  elif avg_speed >= 80 and speed_dev <= 60:
+                      quality = 80
                       stable = True
-                  elif speed >= 40:
-                      quality = 65
+                  elif avg_speed >= 40 and speed_dev <= 70:
+                      quality = 70
                       stable = True
-                  elif speed >= 30:  # ≥30KB/s即达标
-                      quality = 55
-                      stable = False
+                  elif avg_speed >= 30 and speed_dev <= 80:
+                      quality = 60
+                      stable = True
                   else:
-                      quality = 45
+                      quality = 50
                       stable = False
                   
                   # 分片数加分优化
                   if len(urls) >= 6:
-                      quality += 10
-                  elif len(urls) >= 4:
                       quality += 5
-                  if len(urls)>=3 and has_stream:
-                      quality +=5
+                  elif len(urls) >= 4:
+                      quality += 3
                   quality = min(100, quality)
                   
-                  return True, round(speed, 2), stable, quality, "检测通过"
+                  return True, avg_speed, stable, quality, "检测通过(速度稳定)", speed_dev, ts_speeds
               except Exception as e:
-                  return False, 0.0, False, 0, f"检测失败: {str(e)[:20]}"
+                  return False, 0.0, False, 0, f"检测失败: {str(e)[:20]}", 0.0, []
           
           def batch_stream_test(ip_port, channels):
-              """批量测试频道 - 直接调用合并测速，无快速检测环节"""
+              """批量测试频道 - 带速度波动日志"""
               best_speed = 0
               best_stable = False
               best_quality = 0
+              best_dev = 0.0
               tested = 0
               
               # 优先测试CCTV频道
@@ -351,20 +370,21 @@ jobs:
               # 测试前3个频道
               for channel_name, channel_url in test_channels[:3]:
                   tested += 1
-                  available, speed, stable, quality, diagnosis = merged_stream_test(channel_url, min_speed=30)
+                  available, speed, stable, quality, diagnosis, speed_dev, ts_speeds = merged_stream_test(channel_url)
                   if not available:
-                      print(f"      {channel_name}: {diagnosis}")
+                      print(f"      {channel_name}: ❌ {diagnosis} | 分片速度: {ts_speeds} | 波动: {speed_dev}")
                       continue
-                  print(f"      {channel_name}: 检测通过 - 速度: {speed:.2f} KB/s, 质量: {quality}分")
+                  print(f"      {channel_name}: ✅ {diagnosis} | 平均速度: {speed}KB/s | 分片速度: {ts_speeds} | 波动: {speed_dev} | 质量: {quality}分")
                   # 更新最优结果
                   if quality > best_quality or (quality == best_quality and speed > best_speed):
                       best_speed = speed
                       best_stable = stable
                       best_quality = quality
-                  if quality >= 75:  # 高质量流直接终止测试
+                      best_dev = speed_dev
+                  if quality >= 80:  # 高质量稳定流直接终止测试
                       break
               
-              return best_speed, best_stable, best_quality, tested
+              return best_speed, best_stable, best_quality, tested, best_dev
           
           def hotel_ip_port_from_urls(url_list):
               """主函数：提取IP端口并测速"""
@@ -420,7 +440,7 @@ jobs:
                   for ip_port in ip_port_list:
                       available_ips.append((ip_port, f"http://{ip_port}/iptv/live/1000.json?key=txiptv"))
               
-              print(f"\n步骤3: 从可用IP解析频道信息并5秒测速...")
+              print(f"\n步骤3: 从可用IP解析频道信息并测速(含速度稳定检测)...")
               speed_tested_ips = []
               for idx, (ip_port, interface_url) in enumerate(available_ips, 1):
                   try:
@@ -431,26 +451,26 @@ jobs:
                           alt_url = f"http://{ip_port}/ZHGXTV/Public/json/live_interface.txt" if "iptv" in interface_url else f"http://{ip_port}/iptv/live/1000.json?key=txiptv"
                           channels = hotel_channels_from_ip_port(ip_port, alt_url)
                       if not channels:
-                          print(f"    {ip_port}: 无频道信息")
+                          print(f"    {ip_port}: 无频道信息，跳过")
                           continue
                       cctv_channels = [(name, url) for name, url in channels if "CCTV" in name.upper()] or channels
                       print(f"    {ip_port}: 找到 {len(cctv_channels)} 个频道，开始测速...")
-                      best_speed, best_stable, best_quality, tested_count = batch_stream_test(ip_port, cctv_channels)
+                      best_speed, best_stable, best_quality, tested_count, best_dev = batch_stream_test(ip_port, cctv_channels)
                       if tested_count == 0:
-                          print(f"    {ip_port}: 所有频道测试失败")
+                          print(f"    {ip_port}: 所有频道测试失败，跳过")
                           continue
-                      if best_speed >= 30:  # ≥30KB/s即达标保存
-                          speed_tested_ips.append((ip_port, (best_speed, best_stable, best_quality)))
-                          stable_tag = "稳定" if best_stable else "不稳定"
-                          print(f"    {ip_port}: 通过测试 - {stable_tag}, 速度: {best_speed:.2f} KB/s, 质量{best_quality}分")
+                      if best_speed >= MIN_SPEED:
+                          speed_tested_ips.append((ip_port, (best_speed, best_stable, best_quality, best_dev)))
+                          stable_tag = "✅稳定" if best_stable else "❌不稳定"
+                          print(f"    {ip_port}: {stable_tag} 通过测试 | 速度: {best_speed:.2f}KB/s | 波动: {best_dev:.2f} | 质量: {best_quality}分")
                       else:
-                          print(f"    {ip_port}: 测试失败 - 速度: {best_speed:.2f} KB/s (低于30KB/s阈值)")
+                          print(f"    {ip_port}: 测试失败 | 速度: {best_speed:.2f}KB/s (低于{MIN_SPEED}KB/s阈值)")
                   except Exception as e:
                       print(f"    {ip_port}: 处理失败 - {e}")
               
-              # 按稳定性、速度降序排序
-              speed_tested_ips.sort(key=lambda x: (x[1][1], x[1][0]), reverse=True)
-              print(f"\n步骤4: 保存通过30KB/s测速的IP端口...")
+              # 排序：稳定优先 → 速度降序 → 波动升序
+              speed_tested_ips.sort(key=lambda x: (not x[1][1], -x[1][0], x[1][3]))
+              print(f"\n步骤4: 保存通过稳定测速的IP端口...")
               output_dir = "Hotel/ip"
               os.makedirs(output_dir, exist_ok=True)
               output_file = os.path.join(output_dir, "hotel_ip.txt")
@@ -460,29 +480,29 @@ jobs:
               if not speed_tested_ips:
                   with open(output_file, 'w', encoding='utf-8') as f:
                       for ip_port, _ in available_ips:
-                          f.write(f"{ip_port}  # 未通过30KB/s测速\n")
+                          f.write(f"{ip_port}  # 未通过{MIN_SPEED}KB/s+稳定测速\n")
               
               # 输出统计结果
-              print(f"\n" + "="*60)
-              print(f"处理完成统计:")
+              print(f"\n" + "="*80)
+              print(f"处理完成统计【测速规则：{DETECT_TIMEOUT}秒/{TEST_TS_NUM}分片 | 平均≥{MIN_SPEED}KB/s | 波动≤{SPEED_DEV_THRESH} | 单分片≥{MIN_TS_SPEED}KB/s】")
               print(f"  - 初始提取IP端口: {len(ip_port_set)} 个")
               print(f"  - 可用IP端口: {len(available_ips)} 个")
-              print(f"  - 测速达标IP端口(≥30KB/s): {len(speed_tested_ips)} 个")
-              print(f"  - 稳定流畅流: {len([x for x in speed_tested_ips if x[1][1]])} 个")
+              print(f"  - 测速达标IP端口(速度+稳定): {len(speed_tested_ips)} 个")
+              print(f"  - 真正稳定流(无波动/低波动): {len([x for x in speed_tested_ips if x[1][1]])} 个")
               print(f"  - 结果已保存到: {output_file}")
-              print("="*60)
+              print("="*80)
               
               # 输出达标IP列表
               if speed_tested_ips:
-                  print(f"\n测速达标IP端口(≥30KB/s，稳定优先 → 速度降序):")
+                  print(f"\n测速达标IP端口(稳定优先 → 速度降序 → 波动升序):")
                   show_num = min(40, len(speed_tested_ips))
-                  for i, (ip_port, (speed, stable, quality)) in enumerate(speed_tested_ips[:show_num], 1):
+                  for i, (ip_port, (speed, stable, quality, dev)) in enumerate(speed_tested_ips[:show_num], 1):
                       stable_tag = "✅" if stable else "❌"
-                      print(f"  {i:2d}. {ip_port} - {stable_tag} 速度: {speed:.2f} KB/s 质量: {quality}分")
+                      print(f"  {i:2d}. {ip_port} | {stable_tag} 速度: {speed:.2f}KB/s | 波动: {dev:.2f} | 质量: {quality}分")
                   if len(speed_tested_ips) > show_num:
                       print(f"  ... 还有 {len(speed_tested_ips)-show_num} 个达标IP端口")
               else:
-                  print("\n警告: 未找到≥30KB/s的有效IP端口")
+                  print(f"\n警告: 未找到满足【{MIN_SPEED}KB/s+速度稳定】的有效IP端口")
           
           if __name__ == "__main__":
               import urllib3
