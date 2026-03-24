@@ -192,8 +192,8 @@ jobs:
                   print(f"解析频道错误 {interface_url}: {e}")
                   return []
           
-          def smart_ts_detection(channel_url, max_wait=2):
-              """智能TS分片检测 - 快测/详测共用"""
+          def smart_ts_detection(channel_url, max_wait=5):
+              """智能TS分片检测 - 合并后：固定5秒、3个分片"""
               try:
                   session = requests.Session()
                   session.headers.update(HEADERS)
@@ -212,7 +212,7 @@ jobs:
                                   if chunk:
                                       bytes_downloaded += len(chunk)
                                       chunk_count += 1
-                                      if time.time() - start >= max_wait or bytes_downloaded >= (256 if max_wait>=5 else 128) * 1024:
+                                      if time.time() - start >= max_wait or bytes_downloaded >= 256 * 1024:
                                           break
                               if bytes_downloaded < 512 or chunk_count < 2:
                                   return False, [], 0
@@ -254,12 +254,12 @@ jobs:
                   if not ts_urls:
                       return True, [channel_url], 50.0
                   
-                  test_ts_num = 3 if max_wait >=5 else 2
+                  test_ts_num = 3  # 固定3个分片测试
                   total_bytes = 0
                   total_time = 0
                   success_count = 0
                   MIN_CHUNK_SIZE = 512
-                  max_download = 256 if max_wait>=5 else 128
+                  max_download = 256  # 5秒对应最大下载256KB
                   
                   for ts_url in ts_urls[:test_ts_num]:
                       try:
@@ -282,7 +282,7 @@ jobs:
                       except:
                           continue
                   
-                  if success_count < (2 if max_wait>=5 else 1):
+                  if success_count < 1:  # 至少1个分片成功即有效
                       return False, [], 0
                   if total_time > 0:
                       speed = (total_bytes / 1024) / total_time
@@ -292,29 +292,14 @@ jobs:
               except Exception as e:
                   return False, [], 0
           
-          def quick_stream_check(channel_url, min_speed=30):
-              """快速检测 - 固定2秒"""
-              try:
-                  has_stream, urls, speed = smart_ts_detection(channel_url, max_wait=2)
-                  if has_stream:
-                      if speed >= min_speed:
-                          return True, round(speed, 2), f"速度达标 ({speed:.0f} KB/s)"
-                      elif speed > 0:
-                          return True, round(speed, 2), f"速度偏低 ({speed:.0f} KB/s)"
-                      else:
-                          return True, 30.0, "流可用，速度测试异常"
-                  else:
-                      return False, 0, "检测到断流/无有效流数据"
-              except Exception as e:
-                  return False, 0, f"检测失败: {str(e)[:20]}"
-          
-          def test_stream_speed_optimized(channel_url, max_test_time=5):
-              """详细测速 - 固定5秒"""
+          def merged_stream_test(channel_url, min_speed=30):
+              """合并后的测速方法：5秒+3分片+≥30KB/s判定"""
               try:
                   has_stream, urls, speed = smart_ts_detection(channel_url, max_wait=5)
-                  if not has_stream:
-                      return 0.0, False, 0
+                  if not has_stream or speed < min_speed:
+                      return False, 0.0, False, 0, "速度<30KB/s或流不可用"
                   
+                  # 质量分和稳定性判定
                   if speed >= 150:
                       quality = 90
                       stable = True
@@ -324,35 +309,34 @@ jobs:
                   elif speed >= 40:
                       quality = 65
                       stable = True
-                  elif speed >= 30:
+                  elif speed >= 30:  # ≥30KB/s即达标
                       quality = 55
                       stable = False
-                  elif speed > 0:
+                  else:
                       quality = 45
                       stable = False
-                  else:
-                      quality = 50
-                      stable = False
-                      speed = 30.0
                   
+                  # 分片数加分优化
                   if len(urls) >= 6:
                       quality += 10
                   elif len(urls) >= 4:
                       quality += 5
-                  if len(urls)>=3 and has_stream and max_test_time>=5:
+                  if len(urls)>=3 and has_stream:
                       quality +=5
+                  quality = min(100, quality)
                   
-                  return round(speed, 2), stable, min(100, quality)
+                  return True, round(speed, 2), stable, quality, "检测通过"
               except Exception as e:
-                  return 0.0, False, 0
+                  return False, 0.0, False, 0, f"检测失败: {str(e)[:20]}"
           
-          def batch_stream_test(ip_port, channels, max_test_time=5):
-              """批量测试频道"""
+          def batch_stream_test(ip_port, channels):
+              """批量测试频道 - 直接调用合并测速，无快速检测环节"""
               best_speed = 0
               best_stable = False
               best_quality = 0
               tested = 0
               
+              # 优先测试CCTV频道
               priority_channels = []
               other_channels = []
               for name, url in channels[:5]:
@@ -364,19 +348,20 @@ jobs:
                       other_channels.append((name, url))
               test_channels = priority_channels + other_channels
               
+              # 测试前3个频道
               for channel_name, channel_url in test_channels[:3]:
                   tested += 1
-                  available, speed, diagnosis = quick_stream_check(channel_url, min_speed=30)
+                  available, speed, stable, quality, diagnosis = merged_stream_test(channel_url, min_speed=30)
                   if not available:
-                      print(f"      {channel_name}: 快速检测失败 - {diagnosis}")
+                      print(f"      {channel_name}: {diagnosis}")
                       continue
-                  print(f"      {channel_name}: 快速检测通过 ({speed:.0f} KB/s)，详细测速中...")
-                  speed, is_stable, quality = test_stream_speed_optimized(channel_url, max_test_time)
+                  print(f"      {channel_name}: 检测通过 - 速度: {speed:.2f} KB/s, 质量: {quality}分")
+                  # 更新最优结果
                   if quality > best_quality or (quality == best_quality and speed > best_speed):
                       best_speed = speed
-                      best_stable = is_stable
+                      best_stable = stable
                       best_quality = quality
-                  if quality >= 75:
+                  if quality >= 75:  # 高质量流直接终止测试
                       break
               
               return best_speed, best_stable, best_quality, tested
@@ -435,7 +420,7 @@ jobs:
                   for ip_port in ip_port_list:
                       available_ips.append((ip_port, f"http://{ip_port}/iptv/live/1000.json?key=txiptv"))
               
-              print(f"\n步骤3: 从可用IP解析频道信息并测速...")
+              print(f"\n步骤3: 从可用IP解析频道信息并5秒测速...")
               speed_tested_ips = []
               for idx, (ip_port, interface_url) in enumerate(available_ips, 1):
                   try:
@@ -449,22 +434,23 @@ jobs:
                           print(f"    {ip_port}: 无频道信息")
                           continue
                       cctv_channels = [(name, url) for name, url in channels if "CCTV" in name.upper()] or channels
-                      print(f"    {ip_port}: 找到 {len(cctv_channels)} 个频道，开始测试...")
+                      print(f"    {ip_port}: 找到 {len(cctv_channels)} 个频道，开始测速...")
                       best_speed, best_stable, best_quality, tested_count = batch_stream_test(ip_port, cctv_channels)
                       if tested_count == 0:
                           print(f"    {ip_port}: 所有频道测试失败")
                           continue
-                      if best_speed >= 30 or best_quality >= 40:
+                      if best_speed >= 30:  # ≥30KB/s即达标保存
                           speed_tested_ips.append((ip_port, (best_speed, best_stable, best_quality)))
                           stable_tag = "稳定" if best_stable else "不稳定"
                           print(f"    {ip_port}: 通过测试 - {stable_tag}, 速度: {best_speed:.2f} KB/s, 质量{best_quality}分")
                       else:
-                          print(f"    {ip_port}: 测试失败 - 速度: {best_speed:.2f} KB/s, 质量: {best_quality}分")
+                          print(f"    {ip_port}: 测试失败 - 速度: {best_speed:.2f} KB/s (低于30KB/s阈值)")
                   except Exception as e:
                       print(f"    {ip_port}: 处理失败 - {e}")
               
+              # 按稳定性、速度降序排序
               speed_tested_ips.sort(key=lambda x: (x[1][1], x[1][0]), reverse=True)
-              print(f"\n步骤4: 保存通过测速的IP端口...")
+              print(f"\n步骤4: 保存通过30KB/s测速的IP端口...")
               output_dir = "Hotel/ip"
               os.makedirs(output_dir, exist_ok=True)
               output_file = os.path.join(output_dir, "hotel_ip.txt")
@@ -474,19 +460,21 @@ jobs:
               if not speed_tested_ips:
                   with open(output_file, 'w', encoding='utf-8') as f:
                       for ip_port, _ in available_ips:
-                          f.write(f"{ip_port}  # 未通过真实播放测速\n")
+                          f.write(f"{ip_port}  # 未通过30KB/s测速\n")
               
+              # 输出统计结果
               print(f"\n" + "="*60)
               print(f"处理完成统计:")
               print(f"  - 初始提取IP端口: {len(ip_port_set)} 个")
               print(f"  - 可用IP端口: {len(available_ips)} 个")
-              print(f"  - 测速达标IP端口: {len(speed_tested_ips)} 个")
+              print(f"  - 测速达标IP端口(≥30KB/s): {len(speed_tested_ips)} 个")
               print(f"  - 稳定流畅流: {len([x for x in speed_tested_ips if x[1][1]])} 个")
               print(f"  - 结果已保存到: {output_file}")
               print("="*60)
               
+              # 输出达标IP列表
               if speed_tested_ips:
-                  print(f"\n真实播放速度达标IP端口 (稳定优先 → 速度降序):")
+                  print(f"\n测速达标IP端口(≥30KB/s，稳定优先 → 速度降序):")
                   show_num = min(40, len(speed_tested_ips))
                   for i, (ip_port, (speed, stable, quality)) in enumerate(speed_tested_ips[:show_num], 1):
                       stable_tag = "✅" if stable else "❌"
@@ -494,7 +482,7 @@ jobs:
                   if len(speed_tested_ips) > show_num:
                       print(f"  ... 还有 {len(speed_tested_ips)-show_num} 个达标IP端口")
               else:
-                  print("\n警告: 没有找到真实播放速度达标的IP端口")
+                  print("\n警告: 未找到≥30KB/s的有效IP端口")
           
           if __name__ == "__main__":
               import urllib3
