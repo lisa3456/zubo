@@ -268,7 +268,7 @@ jobs:
                         if ts_resp.status_code == 200:
                             total_bytes += len(ts_resp.content)
                         # 检测断流（2秒无数据算一次中断）
-                        if time.time() - last_ts_time > 0.3:
+                        if time.time() - last_ts_time > 2:
                             interrupt_count += 1
                         last_ts_time = time.time()
                     except requests.exceptions.RequestException:
