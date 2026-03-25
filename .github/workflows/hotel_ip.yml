@@ -38,11 +38,10 @@ jobs:
           from urllib.parse import urlparse, urljoin
           from concurrent.futures import ThreadPoolExecutor, as_completed
           
-          # 测速配置项【适配4s/5s分片：超6s下载=卡顿，核心阈值】
+          # 测速配置项【仅保留基础配置，取消所有耗时阈值】
           DETECT_TIMEOUT = 8    # 单分片最大下载硬超时（秒）
           TEST_TS_NUM = 3       # 测试分片数
-          MAX_TS_COST = 6       # 核心达标阈值：单分片下载≤6s才流畅
-          COST_DEV_THRESH = 1.5 # 耗时波动阈值：≤1.5s，避免忽快忽慢
+          COST_DEV_THRESH = 1.5 # 耗时波动参考值（仅统计，不判定）
           MIN_CHUNK_SIZE = 512  # 最小有效分片大小（字节）
           
           # 请求头设置
@@ -209,7 +208,7 @@ jobs:
               return math.sqrt(variance)
           
           def smart_ts_detection(channel_url):
-              """智能TS分片检测 - 适配4s/5s分片，按完整下载耗时判定"""
+              """智能TS分片检测 - 仅统计下载耗时，无阈值判定"""
               try:
                   session = requests.Session()
                   session.headers.update(HEADERS)
@@ -295,31 +294,25 @@ jobs:
                   return False, [], 0.0, 0.0, []
           
           def merged_stream_test(channel_url):
-              """合并后的测速方法 - 4s/5s分片专属：6s内下载达标+低波动"""
+              """流测试 - 仅统计耗时/波动/质量分，取消所有阈值判定"""
               try:
                   has_stream, urls, avg_cost, cost_dev, ts_costs = smart_ts_detection(channel_url)
-                  # 核心判定：流可用+平均耗时≤6s+无单分片超6s+波动≤1.5s
+                  # 仅判定流是否可用，无任何耗时/波动阈值淘汰
                   if not has_stream:
                       return False, 0.0, False, 0, "流不可用", 0.0, []
-                  if avg_cost > MAX_TS_COST:
-                      return False, avg_cost, False, 0, f"平均耗时{avg_cost}秒＞{MAX_TS_COST}秒（卡顿）", cost_dev, ts_costs
-                  if any(c > MAX_TS_COST for c in ts_costs):
-                      return False, avg_cost, False, 0, f"存在分片超{MAX_TS_COST}秒（直接卡顿）", cost_dev, ts_costs
-                  if cost_dev > COST_DEV_THRESH:
-                      return False, avg_cost, False, 0, f"耗时波动{cost_dev}＞{COST_DEV_THRESH}（忽快忽慢）", cost_dev, ts_costs
                   
-                  # 按耗时+波动判定质量分和稳定性
+                  # 质量分仅作参考，无淘汰逻辑
                   if avg_cost <= 3 and cost_dev <= 0.8:
                       quality = 95
                       stable = True
-                  elif avg_cost <= 4.5 and cost_dev <= 1.2:
+                  elif avg_cost <= 6 and cost_dev <= 1.2:
                       quality = 80
                       stable = True
-                  elif avg_cost <= MAX_TS_COST and cost_dev <= COST_DEV_THRESH:
+                  elif avg_cost <= 10 and cost_dev <= 2.0:
                       quality = 70
                       stable = True
                   else:
-                      quality = 50
+                      quality = 60
                       stable = False
                   
                   # 分片数加分优化
@@ -329,13 +322,13 @@ jobs:
                       quality += 3
                   quality = min(100, quality)
                   
-                  return True, avg_cost, stable, quality, "检测通过(6s内下载，播放流畅)", cost_dev, ts_costs
+                  return True, avg_cost, stable, quality, "流可用(仅统计耗时)", cost_dev, ts_costs
               except Exception as e:
                   return False, 0.0, False, 0, f"检测失败: {str(e)[:20]}", 0.0, []
           
           def batch_stream_test(ip_port, channels):
-              """批量测试频道 - 仅测试1个首个CCTV频道（取消2、3频道检测）"""
-              best_cost = None  # 修复999.99：初始化为None，而非固定值
+              """批量测试频道 - 仅测试1个首个CCTV频道，无阈值判定"""
+              best_cost = None  # 初始化为None，代表未获取有效耗时
               best_stable = False
               best_quality = 0
               best_dev = 999.99
@@ -367,7 +360,7 @@ jobs:
               return best_cost, best_stable, best_quality, tested, best_dev
           
           def hotel_ip_port_from_urls(url_list):
-              """主函数：提取IP端口并按4s/5s分片规则测速"""
+              """主函数：提取IP端口+统计耗时，取消阈值，所有有效IP按耗时升序排序"""
               ip_port_set = set()
               
               print("步骤1: 从直播源URL提取IP和端口...")
@@ -420,7 +413,7 @@ jobs:
                   for ip_port in ip_port_list:
                       available_ips.append((ip_port, f"http://{ip_port}/iptv/live/1000.json?key=txiptv"))
               
-              print(f"\n步骤3: 从可用IP解析频道信息并按4s/5s分片测速（仅测1个频道）...")
+              print(f"\n步骤3: 从可用IP解析频道信息并统计下载耗时（仅测1个频道，无阈值淘汰）...")
               speed_tested_ips = []
               for idx, (ip_port, interface_url) in enumerate(available_ips, 1):
                   try:
@@ -436,53 +429,52 @@ jobs:
                       cctv_channels = [(name, url) for name, url in channels if "CCTV" in name.upper()] or channels
                       print(f"    {ip_port}: 找到 {len(cctv_channels)} 个频道，仅测1个核心频道...")
                       best_cost, best_stable, best_quality, tested_count, best_dev = batch_stream_test(ip_port, cctv_channels)
-                      if tested_count == 0 or best_cost is None:  # 判定无有效耗时
-                          print(f"    {ip_port}: 测试失败 | 无有效分片下载耗时（流失效/超时）")
+                      if tested_count == 0 or best_cost is None:  # 仅过滤无有效耗时的IP
+                          print(f"    {ip_port}: 跳过 | 无有效分片下载耗时（流失效/超时）")
                           continue
-                      if best_cost <= MAX_TS_COST:
-                          speed_tested_ips.append((ip_port, (best_cost, best_stable, best_quality, best_dev)))
-                          stable_tag = "✅稳定" if best_stable else "❌不稳定"
-                          print(f"    {ip_port}: {stable_tag} 4s/5s分片适配 | 下载耗时: {best_cost:.2f}秒(≤6s达标) | 波动: {best_dev:.2f} | 质量: {best_quality}分")
-                      else:
-                          print(f"    {ip_port}: 测试失败 | 耗时: {best_cost:.2f}秒 (超{MAX_TS_COST}秒卡顿阈值)")
+                      # 取消所有阈值判定，只要有有效耗时就加入列表
+                      speed_tested_ips.append((ip_port, (best_cost, best_stable, best_quality, best_dev)))
+                      stable_tag = "✅稳定" if best_stable else "⚠️不稳定"
+                      print(f"    {ip_port}: {stable_tag} 已统计 | 下载耗时: {best_cost:.2f}秒 | 波动: {best_dev:.2f} | 质量: {best_quality}分")
                   except Exception as e:
                       print(f"    {ip_port}: 处理失败 - {e}")
               
-              # 排序规则：稳定优先 → 耗时升序（越短越优） → 波动升序（越小越稳）
-              speed_tested_ips.sort(key=lambda x: (not x[1][1], x[1][0], x[1][3]))
-              print(f"\n步骤4: 保存通过6s耗时测速的IP端口...")
+              # 核心排序规则：仅按【下载耗时升序】排序（耗时越短越优）
+              speed_tested_ips.sort(key=lambda x: x[1][0])
+              print(f"\n步骤4: 保存所有有效IP端口（按下载耗时升序）...")
               output_dir = "Hotel/ip"
               os.makedirs(output_dir, exist_ok=True)
               output_file = os.path.join(output_dir, "hotel_ip.txt")
               with open(output_file, 'w', encoding='utf-8') as f:
                   for ip_port, _ in speed_tested_ips:
                       f.write(f"{ip_port}\n")
+              # 无有效IP时的兜底
               if not speed_tested_ips:
                   with open(output_file, 'w', encoding='utf-8') as f:
                       for ip_port, _ in available_ips:
-                          f.write(f"{ip_port}  # 未通过6s分片下载耗时测速\n")
+                          f.write(f"{ip_port}  # 无有效下载耗时\n")
               
               # 输出统计结果
               print(f"\n" + "="*80)
-              print(f"处理完成统计【4s/5s分片专属规则：单分片≤6s下载 | 波动≤1.5s | 仅测1个核心频道】")
+              print(f"处理完成统计【无阈值判定 | 仅测1个核心频道 | 按下载耗时升序排序】")
               print(f"  - 初始提取IP端口: {len(ip_port_set)} 个")
               print(f"  - 可用IP端口: {len(available_ips)} 个")
-              print(f"  - 测速达标IP端口(6s内+低波动): {len(speed_tested_ips)} 个")
-              print(f"  - 真正稳定流(无波动/低波动): {len([x for x in speed_tested_ips if x[1][1]])} 个")
+              print(f"  - 有效IP端口(获取到下载耗时): {len(speed_tested_ips)} 个")
+              print(f"  - 稳定流IP(低波动): {len([x for x in speed_tested_ips if x[1][1]])} 个")
               print(f"  - 结果已保存到: {output_file}")
               print("="*80)
               
-              # 输出达标IP列表
+              # 输出有效IP列表（按耗时升序）
               if speed_tested_ips:
-                  print(f"\n测速达标IP端口(稳定优先 → 耗时升序 → 波动升序):")
-                  show_num = min(40, len(speed_tested_ips))
+                  print(f"\n有效IP端口(按下载耗时升序排列):")
+                  show_num = min(50, len(speed_tested_ips))
                   for i, (ip_port, (cost, stable, quality, dev)) in enumerate(speed_tested_ips[:show_num], 1):
-                      stable_tag = "✅" if stable else "❌"
+                      stable_tag = "✅" if stable else "⚠️"
                       print(f"  {i:2d}. {ip_port} | {stable_tag} 耗时: {cost:.2f}秒 | 波动: {dev:.2f} | 质量: {quality}分")
                   if len(speed_tested_ips) > show_num:
-                      print(f"  ... 还有 {len(speed_tested_ips)-show_num} 个达标IP端口")
+                      print(f"  ... 还有 {len(speed_tested_ips)-show_num} 个有效IP端口")
               else:
-                  print(f"\n警告: 未找到满足【4s/5s分片6s内下载+低波动】的有效IP端口")
+                  print(f"\n警告: 未找到能获取有效下载耗时的IP端口")
           
           if __name__ == "__main__":
               import urllib3
