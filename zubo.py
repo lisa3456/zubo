@@ -185,7 +185,7 @@ def get_isp_by_regex(ip):
 # 第一阶段：爬取IP并按省份运营商分类【关键修改2】：增加次数判断，每5次运行一次
 def first_stage():
     # 仅当运行次数是5的倍数时，执行爬取逻辑
-    if run_count % 5 != 0:
+    if run_count % 1 != 0:
         print(f"ℹ️ 当前轮次{run_count}，未达到5次倍数，跳过第一阶段IP爬取")
         return run_count
     os.makedirs(IP_DIR, exist_ok=True)
