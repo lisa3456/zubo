@@ -1,8 +1,8 @@
 name: hotel
 
 on:
-  #schedule:
-    #- cron: "0 21 * * *"
+  schedule:
+    - cron: "0 21 1,16 * *"
   workflow_dispatch:          
 
 jobs:
