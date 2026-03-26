@@ -1,8 +1,8 @@
 name: Scan_IP
 on:
   workflow_dispatch:   # 手动触发
-  schedule:
-    - cron: '0 14 * * 0'
+  #schedule:
+    #- cron: '0 14 * * 0'
 
 jobs:
   scan:
