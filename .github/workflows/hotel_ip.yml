@@ -1,7 +1,7 @@
 name: hotel_ip 
 on:
   schedule:
-    - cron: '0 20 1,16 * *'
+    - cron: '0 22 1,16 * *'
   workflow_dispatch:
 jobs:
   hotel-ip:
