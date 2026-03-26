@@ -184,11 +184,11 @@ def get_isp_by_regex(ip):
         return "移动"
     return "未知"
 # ===============================
-# 第一阶段：爬取IP并按省份运营商分类【关键修改2】：增加次数判断，每5次运行一次
+# 第一阶段：爬取IP并按省份运营商分类【核心修改：追加写入前先去重】
 def first_stage():
-    # 仅当运行次数是5的倍数时，执行爬取逻辑
+    # 仅当运行次数是1的倍数时，执行爬取逻辑
     if run_count % 1 != 0:
-        print(f"ℹ️ 当前轮次{run_count}，未达到5次倍数，跳过第一阶段IP爬取")
+        print(f"ℹ️ 当前轮次{run_count}，未达到1次倍数，跳过第一阶段IP爬取")
         return run_count
     os.makedirs(IP_DIR, exist_ok=True)
     all_ips = set()
@@ -230,16 +230,31 @@ def first_stage():
         except Exception as e:
             print(f"⚠️ 解析 {ip_port} 出错：{e}")
             continue
-    # 移除原有的计数更新代码，已移到顶层
-    for filename, ip_set in province_isp_dict.items():
+    # 【核心修改开始】追加写入前先读取文件已有IP，去重后再写入
+    for filename, new_ip_set in province_isp_dict.items():
         path = os.path.join(IP_DIR, filename)
+        # 初始化总IP集合，包含新爬取的IP
+        total_ip_set = new_ip_set.copy()
+        # 如果文件已存在，读取已有IP并加入总集合（自动去重）
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    existing_ips = [line.strip() for line in f if line.strip()]
+                    total_ip_set.update(existing_ips)
+                print(f"📂 读取{path}已有IP：{len(existing_ips)}个，新爬取：{len(new_ip_set)}个")
+            except Exception as e:
+                print(f"⚠️ 读取{path}失败，直接写入新IP：{e}")
+        # 覆盖写入去重后的所有IP（实现追加+去重效果）
         try:
-            with open(path, "a", encoding="utf-8") as f:
-                for ip_port in sorted(ip_set):
+            with open(path, "w", encoding="utf-8") as f:
+                for ip_port in sorted(total_ip_set):
                     f.write(ip_port + "\n")
-            print(f"{path} 已追加写入 {len(ip_set)} 个 IP")
+            # 计算实际新增的IP数量
+            new_add = len(total_ip_set) - (len(existing_ips) if os.path.exists(path) else 0)
+            print(f"{path} 已去重写入，总数量：{len(total_ip_set)}个，本次新增：{new_add}个")
         except Exception as e:
             print(f"❌ 写入 {path} 失败：{e}")
+    # 【核心修改结束】
     print(f"✅ 第一阶段IP爬取完成，当前轮次：{run_count}")
     return run_count
 # ===============================
