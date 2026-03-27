@@ -1,15 +1,12 @@
 name: zubo_ip
 on:
   schedule:
-    # FOFA任务1：
+    # FOFA任务1：UTC 16:00 触发（北京时间次日00:00）
     - cron: '0 16 * * *'
-      id: fofa_task1
-    # FOFA任务2：
+    # FOFA任务2：UTC 18:00 触发（北京时间次日02:00）
     - cron: '0 18 * * *'
-      id: fofa_task2
-    # IP同步任务：
+    # IP同步任务：UTC 17:00 触发（北京时间次日01:00）
     - cron: '0 17 * * *'
-      id: ip_sync
   workflow_dispatch:       # 手动触发，可选择执行全部/指定任务
     inputs:
       run_fofa1:
@@ -38,7 +35,7 @@ jobs:
       # 可扩展FOFA爬取模块 - 任务1
       # ==============================================
       - name: FOFA爬取-任务1
-        if: github.event.schedule.id == 'fofa_task1' || github.event.inputs.run_fofa1 == 'true'
+        if: github.event.schedule.cron == '0 16 * * *' || github.event.inputs.run_fofa1 == 'true'
         env:
           # FOFA链接1（base64查询语句）
           FOFA_URL: "https://fofa.info/result?qbase64=InVkcHh5IiAmJiBjb3VudHJ5PSJDTiIgJiYgcmVnaW9uPSJTaWNodWFuIiAmJiBvcmc9IkNoaW5hbmV0Igo="
@@ -117,7 +114,7 @@ jobs:
       # 可扩展FOFA爬取模块 - 任务2
       # ==============================================
       - name: FOFA爬取-任务2
-        if: github.event.schedule.id == 'fofa_task2' || github.event.inputs.run_fofa2 == 'true'
+        if: github.event.schedule.cron == '0 18 * * *' || github.event.inputs.run_fofa2 == 'true'
         env:
           # FOFA链接2（base64查询语句）
           FOFA_URL: "https://fofa.info/result?qbase64=InVkcHh5IiAmJiBjb3VudHJ5PSJDTiIgJiYgcmVnaW9uPSJCZWlqaW5nIiAmJiBvcmc9IkNoaW5hIFVuaWNvbSBCZWlqaW5nIFByb3ZpbmNlIE5ldHdvcmsi"
@@ -196,7 +193,7 @@ jobs:
       # 原IP同步任务1：从kakaxi下载并解析IPTV
       # ==============================================
       - name: 原IP同步-1. 从kakaxi下载并解析 IPTV
-        if: github.event.schedule.id == 'ip_sync' || github.event.inputs.run_ip_sync == 'true'
+        if: github.event.schedule.cron == '0 17 * * *' || github.event.inputs.run_ip_sync == 'true'
         run: |
           declare -A initial_counts
           for file in ./ip/*.txt; do
@@ -257,7 +254,7 @@ jobs:
       # 原IP同步任务2：从 TV-yjc 同步IP（不覆盖）
       # ==============================================
       - name: 原IP同步-2. 从 TV-yjc 同步IP（不覆盖）
-        if: github.event.schedule.id == 'ip_sync' || github.event.inputs.run_ip_sync == 'true'
+        if: github.event.schedule.cron == '0 17 * * *' || github.event.inputs.run_ip_sync == 'true'
         run: |
           # 先把当前状态暂存，用于后续对比
           git add ip/
@@ -307,7 +304,7 @@ jobs:
       # 原IP同步任务3：从 iptvz 同步电信/联通IP
       # ==============================================
       - name: 原IP同步-3. 从 iptvz 同步电信/联通IP
-        if: github.event.schedule.id == 'ip_sync' || github.event.inputs.run_ip_sync == 'true'
+        if: github.event.schedule.cron == '0 17 * * *' || github.event.inputs.run_ip_sync == 'true'
         run: |
           declare -A initial_counts
           for file in ./ip/*.txt; do
