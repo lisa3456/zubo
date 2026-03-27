@@ -7,10 +7,13 @@ import concurrent.futures
 import subprocess
 from datetime import datetime, timezone, timedelta
 # ===============================
-# 配置区
-FOFA_URLS = {
-    "https://fofa.info/result?qbase64=InVkcHh5IiAmJiBjb3VudHJ5PSJDTiIgJiYgcmVnaW9uPSJCZWlqaW5nIiAmJiBvcmc9IkNoaW5hIFVuaWNvbSBCZWlqaW5nIFByb3ZpbmNlIE5ldHdvcmsi": "ip.txt",
-}
+# 配置区：2条FOFA链接按顺序存放
+FOFA_URLS = [
+    # 奇数轮(1/3/5/7/9)爬取：第一条
+    ("https://fofa.info/result?qbase64=InVkcHh5IiAmJiBjb3VudHJ5PSJDTiIgJiYgcmVnaW9uPSJTaWNodWFuIiAmJiBvcmc9IkNoaW5hbmV0Igo=", "ip.txt"),
+    # 偶数轮(2/4/6/8/10)爬取：第二条
+    ("https://fofa.info/result?qbase64=InVkcHh5IiAmJiBjb3VudHJ5PSJDTiIgJiYgcmVnaW9uPSJCZWlqaW5nIiAmJiBvcmc9IkNoaW5hIFVuaWNvbSBCZWlqaW5nIFByb3ZpbmNlIE5ldHdvcmsi", "ip.txt")
+]
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Referer": "https://fofa.info/",
@@ -22,7 +25,7 @@ RTP_DIR = "rtp"
 ZUBO_FILE = "zubo.txt"
 IPTV_FILE = "IPTV.txt"
 # ===============================
-# 分类与映射配置
+# 分类与映射配置（原逻辑无改动）
 CHANNEL_CATEGORIES = {
     "央视": [
         "CCTV1", "CCTV2", "CCTV3", "CCTV4", "CCTV5", "CCTV5+", "CCTV6", "CCTV7",
@@ -43,9 +46,9 @@ CHANNEL_CATEGORIES = {
         "央视文化精品", "电视指南", "求索纪录", "求索科学", "求索生活", "求索动物", "纪实人文", "金鹰纪实", "纪实科教", 
         "睛彩青少", "睛彩竞技", "睛彩篮球", "文物宝库", "乐游", "生活时尚", "游戏风云", 
         "星空卫视", "凤凰卫视中文台", "凤凰卫视资讯台", "凤凰卫视香港台", "凤凰卫视电影台"
-    ],#任意添加，与仓库中rtp/省份运营商.txt内频道一致即可，或在下方频道名映射中改名
+    ],
 }
-# ===== 映射（别名 -> 标准名） =====
+# ===== 映射（别名 -> 标准名）=====
 CHANNEL_MAPPING = {
     "CCTV1": ["CCTV-1", "CCTV-1 HD", "CCTV1 HD", "CCTV-1综合"],
     "CCTV2": ["CCTV-2", "CCTV-2 HD", "CCTV2 HD", "CCTV-2财经"],
@@ -145,8 +148,9 @@ CHANNEL_MAPPING = {
     "华数古装剧场": ["古装剧场", "IPTV古装剧场"],
     "华数城市剧场": ["城市剧场", "IPTV城市剧场"],   
     "华数魅力时尚": ["魅力时尚", "IPTV魅力时尚"],
-}#格式为"频道分类中的标准名": ["rtp/中的名字"],
+}
 # ===============================
+# 计数文件操作（原逻辑无改动）
 def get_run_count():
     if os.path.exists(COUNTER_FILE):
         try:
@@ -161,11 +165,12 @@ def save_run_count(count):
     except Exception as e:
         print(f"⚠️ 写计数文件失败：{e}")
 # ===============================
-# 【关键修改1】顶层更新计数，程序启动即获取并自增
+# 顶层更新计数，程序启动即自增
 run_count = get_run_count() + 1
 save_run_count(run_count)
 print(f"📌 本次程序运行次数：{run_count}")
 # ===============================
+# 运营商判断（原逻辑无改动）
 def get_isp_from_api(data):
     isp_raw = (data.get("isp") or "").lower()
     if "telecom" in isp_raw or "ct" in isp_raw or "chinatelecom" in isp_raw:
@@ -184,23 +189,28 @@ def get_isp_by_regex(ip):
         return "移动"
     return "未知"
 # ===============================
-# 第一阶段：爬取IP并按省份运营商分类【核心修改：追加写入前先去重】
+# 第一阶段：爬取IP并按省份运营商分类【核心修改：按奇偶轮选择FOFA链接】
 def first_stage():
-    # 仅当运行次数是1的倍数时，执行爬取逻辑
-    if run_count % 1 != 0:
-        print(f"ℹ️ 当前轮次{run_count}，未达到1次倍数，跳过第一阶段IP爬取")
-        return run_count
     os.makedirs(IP_DIR, exist_ok=True)
     all_ips = set()
-    for url, filename in FOFA_URLS.items():
-        print(f"📡 正在爬取 {filename} ...")
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=15)
-            urls_all = re.findall(r'<a href="http://(.*?)"', r.text)
-            all_ips.update(u.strip() for u in urls_all if u.strip())
-        except Exception as e:
-            print(f"❌ 爬取失败：{e}")
-        time.sleep(3)
+    # 核心逻辑：奇数轮选第一条FOFA，偶数轮(含10轮)选第二条FOFA
+    if run_count % 2 == 1:
+        url_index = 0
+        link_desc = "第一条（奇数轮专属）"
+    else:
+        url_index = 1
+        link_desc = "第二条（偶数轮专属）"
+    target_url, filename = FOFA_URLS[url_index]
+    print(f"📡 本轮({run_count})爬取{link_desc}FOFA链接：{target_url} ...")
+    # 爬取逻辑（原逻辑无改动）
+    try:
+        r = requests.get(target_url, headers=HEADERS, timeout=15)
+        urls_all = re.findall(r'<a href="http://(.*?)"', r.text)
+        all_ips.update(u.strip() for u in urls_all if u.strip())
+    except Exception as e:
+        print(f"❌ 爬取失败：{e}")
+    time.sleep(3)
+    # IP解析与分类（原逻辑无改动）
     province_isp_dict = {}
     for ip_port in all_ips:
         try:
@@ -230,12 +240,10 @@ def first_stage():
         except Exception as e:
             print(f"⚠️ 解析 {ip_port} 出错：{e}")
             continue
-    # 【核心修改开始】追加写入前先读取文件已有IP，去重后再写入
+    # IP去重写入（原逻辑无改动）
     for filename, new_ip_set in province_isp_dict.items():
         path = os.path.join(IP_DIR, filename)
-        # 初始化总IP集合，包含新爬取的IP
         total_ip_set = new_ip_set.copy()
-        # 如果文件已存在，读取已有IP并加入总集合（自动去重）
         if os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -244,21 +252,18 @@ def first_stage():
                 print(f"📂 读取{path}已有IP：{len(existing_ips)}个，新爬取：{len(new_ip_set)}个")
             except Exception as e:
                 print(f"⚠️ 读取{path}失败，直接写入新IP：{e}")
-        # 覆盖写入去重后的所有IP（实现追加+去重效果）
         try:
             with open(path, "w", encoding="utf-8") as f:
                 for ip_port in sorted(total_ip_set):
                     f.write(ip_port + "\n")
-            # 计算实际新增的IP数量
             new_add = len(total_ip_set) - (len(existing_ips) if os.path.exists(path) else 0)
             print(f"{path} 已去重写入，总数量：{len(total_ip_set)}个，本次新增：{new_add}个")
         except Exception as e:
             print(f"❌ 写入 {path} 失败：{e}")
-    # 【核心修改结束】
     print(f"✅ 第一阶段IP爬取完成，当前轮次：{run_count}")
     return run_count
 # ===============================
-# 第二阶段：生成zubo.txt组合链接
+# 第二阶段：生成zubo.txt组合链接（原逻辑无改动）
 def second_stage():
     print("🔔 第二阶段触发：生成 zubo.txt")
     if not os.path.exists(IP_DIR):
@@ -309,7 +314,7 @@ def second_stage():
     except Exception as e:
         print(f"❌ 写文件失败：{e}")
 # ===============================
-# 第三阶段：多线程检测频道并生成IPTV.txt（返回可播放IP字典供第四阶段使用）
+# 第三阶段：多线程检测频道并生成IPTV.txt（原逻辑无改动）
 def third_stage():
     print("🧩 第三阶段：多线程检测代表频道生成 IPTV.txt，准备可播放IP数据")
     if not os.path.exists(ZUBO_FILE):
@@ -331,7 +336,7 @@ def third_stage():
     for main_name, aliases in CHANNEL_MAPPING.items():
         for alias in aliases:
             alias_map[alias] = main_name
-    # 读取现有 ip 文件，建立 ip_port -> operator 映射
+    # 读取IP-运营商映射
     ip_info = {}
     if os.path.exists(IP_DIR):
         for fname in os.listdir(IP_DIR):
@@ -346,7 +351,7 @@ def third_stage():
                             ip_info[ip_port] = province_operator
             except Exception as e:
                 print(f"⚠️ 读取 {fname} 失败：{e}")
-    # 读取 zubo.txt 并按 ip:port 分组
+    # 按IP分组频道
     groups = {}
     with open(ZUBO_FILE, encoding="utf-8") as f:
         for line in f:
@@ -359,7 +364,7 @@ def third_stage():
                 continue
             ip_port = m.group(1)
             groups.setdefault(ip_port, []).append((ch_main, url))
-    # 选择代表频道并检测
+    # 多线程检测可播放IP
     def detect_ip(ip_port, entries):
         rep_channels = [u for c, u in entries if c == "CCTV1"]
         if not rep_channels and entries:
@@ -379,41 +384,34 @@ def third_stage():
             if ok:
                 playable_ips.add(ip_port)
     print(f"✅ 检测完成，可播放 IP 共 {len(playable_ips)} 个")
-    # 按频道收集线路（最多50条，优先北京、上海、四川IP | 方案1高性能版）
+    # 按优先级收集频道线路
     channel_lines = {}
     operator_playable_ips = {}
     priority_provinces = {"北京", "上海", "四川"}
     for ip_port in playable_ips:
         operator = ip_info.get(ip_port, "未知")
         operator_playable_ips.setdefault(operator, set()).add(ip_port)
-        # 快速判断是否为优先省份IP
         is_priority = any(prov in operator for prov in priority_provinces)
-        # 按优先级分堆存入频道
         for c, u in groups.get(ip_port, []):
             key = f"{c},{u}${operator}"
             if c not in channel_lines:
-                # 初始化：优先堆 + 普通堆
                 channel_lines[c] = {"priority": [], "normal": []}
             if is_priority:
                 channel_lines[c]["priority"].append(key)
             else:
                 channel_lines[c]["normal"].append(key)
-    # 合并优先堆+普通堆，每个频道最多50条
+    # 合并线路（最多50条）
     valid_lines = []
     for ch, heap_dict in channel_lines.items():
         prio_list = heap_dict["priority"]
         norm_list = heap_dict["normal"]
-        # 优先堆全取 + 普通堆补位，总条数不超50
         take_prio = len(prio_list)
         take_norm = 50 - take_prio
         selected = prio_list[:50] + norm_list[:take_norm] if take_norm > 0 else prio_list[:50]
         valid_lines.extend(selected)
     print(f"✅ 已限制：每个频道最多保留 50 条线路，优先北京、上海、四川IP")
-    
-    # 写 IPTV.txt（包含更新时间与分类）
+    # 生成IPTV.txt
     beijing_now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
-    disclaimer_url = ""
-    # 统计北京、上海、四川可播放IP数量
     bj_count = sum(1 for ip in playable_ips if "北京" in ip_info.get(ip, ""))
     sh_count = sum(1 for ip in playable_ips if "上海" in ip_info.get(ip, ""))
     sc_count = sum(1 for ip in playable_ips if "四川" in ip_info.get(ip, ""))
@@ -432,10 +430,9 @@ def third_stage():
         print(f"🎯 IPTV.txt 生成完成，共 {len(valid_lines)} 条频道")
     except Exception as e:
         print(f"❌ 写 IPTV.txt 失败：{e}")
-    # 返回可播放IP的运营商字典，供第四阶段使用
     return operator_playable_ips
 # ===============================
-# 第四阶段：写回可用IP到ip目录（独立阶段，每5次执行一次）
+# 第四阶段：写回可用IP到ip目录（原逻辑无改动，仅10轮触发）
 def fourth_stage(operator_playable_ips):
     if not operator_playable_ips:
         print("⚠️ 无可用IP数据，跳过第四阶段")
@@ -452,7 +449,7 @@ def fourth_stage(operator_playable_ips):
             print(f"❌ 写回 {target_file} 失败：{e}")
     print("✅ 第四阶段完成：所有可用IP已覆盖写入ip目录")
 # ===============================
-# 文件推送
+# 文件推送（原逻辑无改动）
 def push_all_files():
     print("🚀 推送所有更新文件到 GitHub...")
     try:
@@ -466,20 +463,28 @@ def push_all_files():
     os.system('git commit -m "自动更新：计数、IP文件、IPTV.txt" || echo "⚠️ 无需提交"')
     os.system("git push origin main || echo '⚠️ 推送失败'")
 # ===============================
-# 主执行逻辑【关键修改3】：移除主函数内的计数更新，直接使用顶层run_count
+# 主执行逻辑【核心修改：按奇偶轮+10轮全阶段实现】
 if __name__ == "__main__":
-    # 确保目录存在
+    # 确保基础目录存在
     os.makedirs(IP_DIR, exist_ok=True)
     os.makedirs(RTP_DIR, exist_ok=True)
-    # 执行第一阶段，直接传入顶层的run_count
+    # 所有轮次必执行：第一阶段IP爬取
     first_stage()
-    # 每次都执行第二、三阶段
+
+    # 奇数轮(1/3/5/7/9)：仅执行第一阶段，直接退出
+    if run_count % 2 == 1:
+        print(f"📌 本次为第{run_count}次【奇数轮】，仅完成IP爬取，跳过后续所有阶段")
+        exit()
+
+    # 偶数轮(2/4/6/8/10)：执行第二、三阶段
     second_stage()
     operator_playable_ips = third_stage()
-    # 每5次运行一次第四阶段（取模等于0时执行）
-    if run_count % 5 == 0:
+
+    # 第10轮（及10的倍数轮）：额外执行第四阶段（写回可用IP）
+    if run_count % 10 == 0:
         fourth_stage(operator_playable_ips)
     else:
-        print(f"ℹ️ 当前轮次{run_count}，未达到5次，跳过第四阶段")
-    # 推送文件
+        print(f"ℹ️ 当前轮次{run_count}，未达到10轮，跳过第四阶段")
+
+    # 所有偶数轮均执行：文件推送到GitHub
     push_all_files()
