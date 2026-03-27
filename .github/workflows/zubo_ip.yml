@@ -56,22 +56,20 @@ jobs:
           crawl_count=$(echo "$all_ips" | wc -l)
           echo "✅ 初步爬取到IP数量：$crawl_count 个"
           
-          # 初始化统计：记录每个文件原始行数
-          declare -A initial_counts
-          for file in ./ip/*.txt; do
-            [ -f "$file" ] && initial_counts["$file"]=$(wc -l < "$file") || initial_counts["$file"]=0
-          done
           total_new=0
           target_file="ip/${{ env.FIXED_PROVINCE }}${{ env.FIXED_ISP }}.txt"
           touch "$target_file"
           
-          # 直接写入固定归属文件，无需调用ip-api
+          # 直接写入固定归属文件，实时统计新增，不重复去重
           while IFS= read -r ip_port; do
             if ! grep -xFq "$ip_port" "$target_file" 2>/dev/null; then
               echo "$ip_port" >> "$target_file"
-              sort -u "$target_file" -o "$target_file"
+              total_new=$((total_new + 1))  # 实时计数，准确统计本次新增
             fi
           done <<< "$all_ips"
+          
+          # 循环结束后统一去重排序，只执行一次
+          sort -u "$target_file" -o "$target_file"
           
           # 统计并输出更新日志（和原IP同步格式一致）
           echo "====================================="
@@ -79,12 +77,8 @@ jobs:
           echo "爬取IP总数: $crawl_count 条"
           echo "固定写入文件: $(basename "$target_file")"
           echo "更新文件列表:"
-          final_count=$(wc -l < "$target_file")
-          initial_count=${initial_counts["$target_file"]}
-          added=$((final_count - initial_count))
-          if [ $added -gt 0 ]; then
-            echo "  - $(basename "$target_file"): +$added 条"
-            total_new=$added
+          if [ $total_new -gt 0 ]; then
+            echo "  - $(basename "$target_file"): +$total_new 条"
           else
             echo "  - 无新增IP"
           fi
@@ -116,22 +110,20 @@ jobs:
           crawl_count=$(echo "$all_ips" | wc -l)
           echo "✅ 初步爬取到IP数量：$crawl_count 个"
           
-          # 初始化统计：记录每个文件原始行数
-          declare -A initial_counts
-          for file in ./ip/*.txt; do
-            [ -f "$file" ] && initial_counts["$file"]=$(wc -l < "$file") || initial_counts["$file"]=0
-          done
           total_new=0
           target_file="ip/${{ env.FIXED_PROVINCE }}${{ env.FIXED_ISP }}.txt"
           touch "$target_file"
           
-          # 直接写入固定归属文件，无需调用ip-api
+          # 直接写入固定归属文件，实时统计新增，不重复去重
           while IFS= read -r ip_port; do
             if ! grep -xFq "$ip_port" "$target_file" 2>/dev/null; then
               echo "$ip_port" >> "$target_file"
-              sort -u "$target_file" -o "$target_file"
+              total_new=$((total_new + 1))  # 实时计数，准确统计本次新增
             fi
           done <<< "$all_ips"
+          
+          # 循环结束后统一去重排序，只执行一次
+          sort -u "$target_file" -o "$target_file"
           
           # 统计并输出更新日志（和原IP同步格式一致）
           echo "====================================="
@@ -139,12 +131,8 @@ jobs:
           echo "爬取IP总数: $crawl_count 条"
           echo "固定写入文件: $(basename "$target_file")"
           echo "更新文件列表:"
-          final_count=$(wc -l < "$target_file")
-          initial_count=${initial_counts["$target_file"]}
-          added=$((final_count - initial_count))
-          if [ $added -gt 0 ]; then
-            echo "  - $(basename "$target_file"): +$added 条"
-            total_new=$added
+          if [ $total_new -gt 0 ]; then
+            echo "  - $(basename "$target_file"): +$total_new 条"
           else
             echo "  - 无新增IP"
           fi
