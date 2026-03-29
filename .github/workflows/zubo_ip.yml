@@ -160,7 +160,7 @@ jobs:
             echo "  - $file: +${file_added[$file]} 条"
           done
           echo "====================================="
-      - name: 新增IP同步-4. 抓取gongdian并提取公网IP（极简版）
+      - name: 新增IP同步-4. 抓取gongdian并提取公网IP（写入IP:端口版）
         run: |
           # 初始化统计
           declare -A initial_counts
@@ -173,17 +173,21 @@ jobs:
           curl -L -A "okhttp/5.1.0" "$TARGET_URL" -o gongdian_iptv.txt 2>/dev/null
           [ ! -s gongdian_iptv.txt ] && echo "⚠️  无内容，跳过" && exit 0
 
-          # 提取去重后的 host（IP/域名）
+          # 提取去重后的 host:port
           grep "rtp" gongdian_iptv.txt | grep -E "//([^/:]+):[0-9]+/rtp" | \
-            grep -Eo "//([^/:]+):" | sed 's#//##;s/://' | sort -u > host_unique.txt
-          echo "✅ 去重后 host 数量: $(wc -l < host_unique.txt)"
-          [ ! -s host_unique.txt ] && echo "⚠️  无有效 host，跳过" && exit 0
+            grep -Eo "//([^/:]+:[0-9]+)/" | sed 's#//##;s#/##' | sort -u > host_port_unique.txt
+          echo "✅ 去重后 host:port 数量: $(wc -l < host_port_unique.txt)"
+          [ ! -s host_port_unique.txt ] && echo "⚠️  无有效 host:port，跳过" && exit 0
 
           CITY_LIST="北京 上海 天津 重庆"
           new_ip_count=0
 
-          # 逐个处理，失败直接跳过，绝不报错
-          while IFS= read -r host; do
+          # 逐个处理，失败直接跳过
+          while IFS= read -r host_port; do
+            # 拆分 host 和 port
+            host="${host_port%%:*}"
+            port="${host_port##*:}"
+
             # 1. 解析 host 为 IP（失败直接跳过）
             ip=$(dig +short "$host" 2>/dev/null | head -n 1 | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$" || true)
             [ -z "$ip" ] && continue
@@ -193,17 +197,20 @@ jobs:
               continue
             fi
 
-            # 3. 查询 IP 归属（超时2秒，失败直接跳过）
+            # 3. 组合成 IP:端口（和你原有格式一致）
+            ip_port="${ip}:${port}"
+
+            # 4. 查询 IP 归属（超时2秒，失败直接跳过）
             ip_info=$(curl -s "http://ip-api.com/json/${ip}?lang=zh-CN" \
               -A "okhttp/5.1.0" --connect-timeout 1 --max-time 2 2>/dev/null || true)
             [ -z "$ip_info" ] && continue
 
-            # 4. 用 grep 提取省份和运营商（不依赖 jq，避免语法错误）
+            # 5. 用 grep 提取省份和运营商（不依赖 jq）
             province=$(echo "$ip_info" | grep -o '"regionName":"[^"]*' | cut -d'"' -f4 || true)
             isp=$(echo "$ip_info" | grep -o '"isp":"[^"]*' | cut -d'"' -f4 || true)
             [ -z "$province" ] || [ -z "$isp" ] && continue
 
-            # 5. 只保留三大运营商
+            # 6. 只保留三大运营商
             operator=""
             if echo "$isp" | grep -qi "电信"; then
               operator="电信"
@@ -215,24 +222,24 @@ jobs:
               continue
             fi
 
-            # 6. 修正直辖市名称
+            # 7. 修正直辖市名称
             if echo " $CITY_LIST " | grep -q " $province "; then
               target_province="${province}市"
             else
               target_province="$province"
             fi
 
-            # 7. 写入文件（去重）
+            # 8. 写入文件（去重，格式 IP:端口）
             target_file="./ip/${target_province}${operator}.txt"
             touch "$target_file"
-            if ! grep -xFq "$ip" "$target_file"; then
-              echo "$ip" >> "$target_file"
+            if ! grep -xFq "$ip_port" "$target_file"; then
+              echo "$ip_port" >> "$target_file"
               new_ip_count=$((new_ip_count + 1))
             fi
 
             # 极短休眠，防止限流
             sleep 0.1
-          done < host_unique.txt
+          done < host_port_unique.txt
 
           # 统一去重排序
           for file in ./ip/*.txt; do
@@ -240,12 +247,12 @@ jobs:
           done
 
           # 清理临时文件
-          rm -f gongdian_iptv.txt host_unique.txt
+          rm -f gongdian_iptv.txt host_port_unique.txt
 
-          # 输出统计
+          # 输出统计（现在和文件变更完全对应）
           echo "====================================="
           echo "📊 gongdian(rtp) IP 更新统计"
-          echo "新增公网IP总数: $new_ip_count 条"
+          echo "新增公网IP:端口总数: $new_ip_count 条"
           echo "更新文件列表:"
           for file in ./ip/*.txt; do
             [ -f "$file" ] || continue
