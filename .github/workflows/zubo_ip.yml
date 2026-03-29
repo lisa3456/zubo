@@ -160,7 +160,7 @@ jobs:
             echo "  - $file: +${file_added[$file]} 条"
           done
           echo "====================================="
-      - name: 新增IP同步-4. 抓取gongdian并提取带rtp的IP端口（先去重版）
+      - name: 新增IP同步-4. 抓取gongdian并提取带rtp的IP端口（纯IP去重版）
         run: |
           # 初始化统计
           declare -A initial_counts
@@ -178,28 +178,18 @@ jobs:
           CITY_LIST="北京 上海 天津 重庆"
           new_ip_count=0
           
-          # 🔴 关键：先提取所有 rtp 源，并去重（host:port 级别去重）
-          grep "rtp" gongdian_iptv.txt | grep -E "//([^/:]+):[0-9]+/rtp" | sort -u > rtp_unique.txt
-          [ ! -s rtp_unique.txt ] && echo "⚠️  无有效rtp源，跳过本步骤" && exit 0
-          echo "✅ 去重后剩余 rtp 源数量: $(wc -l < rtp_unique.txt)"
+          # 🔴 关键1：只提取纯IP（不管端口、频道），先去重
+          grep -E "rtp/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" gongdian_iptv.txt | \
+            grep -Eo "([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)" | \
+            sort -u > ip_unique.txt
+          echo "✅ 纯IP去重后数量: $(wc -l < ip_unique.txt)"
+          [ ! -s ip_unique.txt ] && echo "⚠️  无有效IP，跳过本步骤" && exit 0
           
-          # 逐个处理（量少，无需并发，避免复杂逻辑）
-          while IFS= read -r line; do
-            # 匹配 域名/IP:端口
-            if [[ $line =~ //([^/:]+):([0-9]+)/rtp ]]; then
-              host="${BASH_REMATCH[1]}"
-              port="${BASH_REMATCH[2]}"
-            else
-              continue
-            fi
-
-            # 快速解析域名到IP（超时5秒，防止卡住）
-            ip=$(timeout 5s dig +short "$host" | head -n 1)
-            [[ -z "$ip" || ! "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && continue
-            ip_port="${ip}:${port}"
-
-            # 快速查询IP归属（超时3秒）
-            ip_info=$(timeout 3s curl -s "http://ip-api.com/json/${ip}?lang=zh-CN" -A "okhttp/5.1.0" --connect-timeout 2 --max-time 3)
+          # 逐个查询IP归属（量少，串行即可）
+          while IFS= read -r ip; do
+            # 用curl自带超时，避免exit code 124
+            ip_info=$(curl -s "http://ip-api.com/json/${ip}?lang=zh-CN" \
+              -A "okhttp/5.1.0" --connect-timeout 2 --max-time 3)
             province=$(echo "$ip_info" | jq -r '.regionName // empty' 2>/dev/null)
             isp=$(echo "$ip_info" | jq -r '.isp // empty' 2>/dev/null)
 
@@ -225,20 +215,20 @@ jobs:
 
             target_file="./ip/${target_province}${operator}.txt"
             touch "$target_file"
-            # 去重追加
-            if ! grep -xFq "$ip_port" "$target_file"; then
-              echo "$ip_port" >> "$target_file"
+            # 去重追加IP（端口可以后续再补，先保证IP入库）
+            if ! grep -xFq "$ip" "$target_file"; then
+              echo "$ip" >> "$target_file"
               new_ip_count=$((new_ip_count + 1))
             fi
-          done < rtp_unique.txt
+          done < ip_unique.txt
           
-          # 统一去重排序所有IP文件
+          # 统一去重排序
           for file in ./ip/*.txt; do
             sort -u "$file" -o "$file"
           done
           
           # 清理临时文件
-          rm -f gongdian_iptv.txt rtp_unique.txt
+          rm -f gongdian_iptv.txt ip_unique.txt
           # 输出统计
           echo "====================================="
           echo "📊 gongdian(rtp) IP 更新统计"
