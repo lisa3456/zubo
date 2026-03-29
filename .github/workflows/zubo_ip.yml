@@ -160,7 +160,7 @@ jobs:
             echo "  - $file: +${file_added[$file]} 条"
           done
           echo "====================================="
-     - name: 新增IP同步-4. 抓取gongdian并提取带rtp的IP端口（先去重版）
+      - name: 新增IP同步-4. 抓取gongdian并提取带rtp的IP端口（先去重版）
         run: |
           # 初始化统计
           declare -A initial_counts
