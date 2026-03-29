@@ -160,8 +160,7 @@ jobs:
             echo "  - $file: +${file_added[$file]} 条"
           done
           echo "====================================="
-          
-      - name: 新增IP同步-4. 抓取gongdian并提取公网IP（导出调试版）
+      - name: 新增IP同步-4. 抓取gongdian并提取IP:端口（api.ip.sb高识别版）
         run: |
           # 初始化统计
           declare -A initial_counts
@@ -169,23 +168,109 @@ jobs:
             [ -f "$file" ] && initial_counts["$file"]=$(wc -l < "$file") || initial_counts["$file"]=0
           done
           mkdir -p ip
-          # 抓取内容
+          # 抓取源内容
           TARGET_URL="https://gongdian.top/tv/guovin"
           curl -L -A "okhttp/5.1.0" "$TARGET_URL" -o gongdian_iptv.txt 2>/dev/null
-          [ ! -s gongdian_iptv.txt ] && echo "⚠️  无内容，跳过" && exit 0
+          [ ! -s gongdian_iptv.txt ] && echo "⚠️  源内容为空，跳过本步骤" && exit 0
 
-          # 🔴 导出去重后的 host:port 到 gongdian.txt（你要的调试文件）
+          # 提取去重host:port并导出到gongdian.txt（保留调试）
           grep "rtp" gongdian_iptv.txt | grep -E "//([^/:]+):[0-9]+/rtp" | \
             grep -Eo "//([^/:]+:[0-9]+)/" | sed 's#//##;s#/##' | sort -u > gongdian.txt
-          echo "✅ 已导出所有 host:port 到 gongdian.txt，数量: $(wc -l < gongdian.txt)"
-          cat gongdian.txt  # 在日志里也打印一遍，方便直接看
+          echo "✅ 已导出个host:port到gongdian.txt，内容如下："
+          cat gongdian.txt
+          [ ! -s gongdian.txt ] && echo "⚠️  无有效host:port，跳过" && exit 0
 
-          # 后面的处理逻辑可以暂时注释掉，只保留导出
-          # （如果需要继续处理，把下面的代码加回来即可）
-          
-          # 清理临时文件（保留 gongdian.txt）
+          # 配置参数
+          CITY_LIST="北京 上海 天津 重庆"
+          new_ip_count=0
+
+          # 逐个处理host:port（api.ip.sb识别）
+          while IFS= read -r host_port; do
+            # 拆分host和端口
+            host="${host_port%%:*}"
+            port="${host_port##*:}"
+            [ -z "$host" ] || [ -z "$port" ] && continue
+
+            # 1. 解析域名到公网IP（纯IP直接保留，域名解析）
+            if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              ip="$host"
+            else
+              ip=$(dig +short "$host" 2>/dev/null | head -n 1 | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$" || true)
+            fi
+            [ -z "$ip" ] && continue
+
+            # 2. 过滤内网/组播IP（只保留公网）
+            if [[ "$ip" =~ ^(10\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[0-1]\.|192\.168\.|22[4-9]\.|23[0-9]\.) ]]; then
+              continue
+            fi
+            ip_port="${ip}:${port}"
+
+            # 3. 用api.ip.sb查询归属地（高识别率，超时3秒）
+            ip_info=$(curl -s "https://api.ip.sb/geoip/$ip" \
+              -A "okhttp/5.1.0" --connect-timeout 2 --max-time 3 2>/dev/null || true)
+            [ -z "$ip_info" ] && continue
+
+            # 4. 提取省份/运营商（适配api.ip.sb返回格式，兼容中英文）
+            province=$(echo "$ip_info" | grep -o '"region":"[^"]*' | cut -d'"' -f4 || true)
+            isp=$(echo "$ip_info" | grep -o '"isp":"[^"]*' | cut -d'"' -f4 || true)
+            # 兼容中文省份别名（如"广东省"|"广东"）
+            province=$(echo "$province" | sed 's/省//;s/自治区//;s/直辖市//;s/特别行政区//')
+            [ -z "$province" ] || [ -z "$isp" ] && continue
+
+            # 5. 匹配三大运营商（精准识别，兼容模糊描述）
+            operator=""
+            if echo "$isp" | grep -qi "电信|China Telecom"; then
+              operator="电信"
+            elif echo "$isp" | grep -qi "移动|China Mobile"; then
+              operator="移动"
+            elif echo "$isp" | grep -qi "联通|China Unicom"; then
+              operator="联通"
+            else
+              continue
+            fi
+
+            # 6. 修正直辖市名称（北京→北京市，保持文件命名统一）
+            if echo " $CITY_LIST " | grep -q " $province "; then
+              target_province="${province}市"
+            else
+              target_province="$province"
+            fi
+
+            # 7. 写入IP:端口到对应文件（去重，和原有格式一致）
+            target_file="./ip/${target_province}${operator}.txt"
+            touch "$target_file"
+            if ! grep -xFq "$ip_port" "$target_file"; then
+              echo "$ip_port" >> "$target_file"
+              new_ip_count=$((new_ip_count + 1))
+            fi
+
+            # 轻量休眠，防止接口限流
+            sleep 0.2
+          done < gongdian.txt
+
+          # 统一去重排序所有IP文件，保证数据干净
+          for file in ./ip/*.txt; do
+            sort -u "$file" -o "$file" 2>/dev/null || true
+          done
+
+          # 清理临时文件（保留gongdian.txt）
           rm -f gongdian_iptv.txt
-          
+
+          # 精准统计输出（和文件新增IP:端口完全对齐）
+          echo "====================================="
+          echo "📊 gongdian(rtp) IP:端口 更新统计"
+          echo "新增有效公网IP:端口总数: $new_ip_count 条"
+          echo "更新文件列表（仅展示有新增的）:"
+          for file in ./ip/*.txt; do
+            [ -f "$file" ] || continue
+            final_count=$(wc -l < "$file" 2>/dev/null || 0)
+            initial_count=${initial_counts["$file"]:-0}
+            added=$((final_count - initial_count))
+            if [ $added -gt 0 ]; then
+              echo "  - $(basename "$file"): +$added 条"
+            fi
+          done
+          echo "====================================="
       - name: 提交并推送所有IP同步更新
         if: always()
         run: |
