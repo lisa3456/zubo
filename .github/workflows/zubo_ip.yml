@@ -160,7 +160,7 @@ jobs:
             echo "  - $file: +${file_added[$file]} 条"
           done
           echo "====================================="
-      - name: 新增IP同步-4. 抓取gongdian
+     - name: 新增IP同步-4. 抓取gongdian并提取带rtp的IP端口（先去重版）
         run: |
           # 初始化统计
           declare -A initial_counts
@@ -177,10 +177,15 @@ jobs:
           # 配置参数
           CITY_LIST="北京 上海 天津 重庆"
           new_ip_count=0
-          # 提取带rtp的行，解析IP/域名+端口
+          
+          # 🔴 关键：先提取所有 rtp 源，并去重（host:port 级别去重）
+          grep "rtp" gongdian_iptv.txt | grep -E "//([^/:]+):[0-9]+/rtp" | sort -u > rtp_unique.txt
+          [ ! -s rtp_unique.txt ] && echo "⚠️  无有效rtp源，跳过本步骤" && exit 0
+          echo "✅ 去重后剩余 rtp 源数量: $(wc -l < rtp_unique.txt)"
+          
+          # 逐个处理（量少，无需并发，避免复杂逻辑）
           while IFS= read -r line; do
-            [[ -z "$line" || ! "$line" =~ rtp ]] && continue
-            # 匹配 域名/IP:端口 两种格式
+            # 匹配 域名/IP:端口
             if [[ $line =~ //([^/:]+):([0-9]+)/rtp ]]; then
               host="${BASH_REMATCH[1]}"
               port="${BASH_REMATCH[2]}"
@@ -188,18 +193,18 @@ jobs:
               continue
             fi
 
-            # 把域名解析成IP（兼容纯IP和域名两种情况）
-            ip=$(dig +short "$host" | head -n 1)
+            # 快速解析域名到IP（超时5秒，防止卡住）
+            ip=$(timeout 5s dig +short "$host" | head -n 1)
             [[ -z "$ip" || ! "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && continue
             ip_port="${ip}:${port}"
 
-            # 调用IP查询接口获取归属地（使用ip-api.com，免费且稳定）
-            ip_info=$(curl -s "http://ip-api.com/json/${ip}?lang=zh-CN" -A "okhttp/5.1.0")
-            # 提取省份和运营商
-            province=$(echo "$ip_info" | jq -r '.regionName // empty')
-            isp=$(echo "$ip_info" | jq -r '.isp // empty')
+            # 快速查询IP归属（超时3秒）
+            ip_info=$(timeout 3s curl -s "http://ip-api.com/json/${ip}?lang=zh-CN" -A "okhttp/5.1.0" --connect-timeout 2 --max-time 3)
+            province=$(echo "$ip_info" | jq -r '.regionName // empty' 2>/dev/null)
+            isp=$(echo "$ip_info" | jq -r '.isp // empty' 2>/dev/null)
 
-            # 过滤运营商（只保留电信/移动/联通）
+            # 只保留三大运营商
+            operator=""
             if echo "$isp" | grep -qi "电信"; then
               operator="电信"
             elif echo "$isp" | grep -qi "移动"; then
@@ -207,34 +212,34 @@ jobs:
             elif echo "$isp" | grep -qi "联通"; then
               operator="联通"
             else
-              # 非三大运营商的IP直接跳过
               continue
             fi
             [[ -z "$province" || -z "$operator" ]] && continue
 
-            # 修正直辖市名称（加"市"）
+            # 修正直辖市名称
             if echo " $CITY_LIST " | grep -q " $province "; then
               target_province="${province}市"
             else
               target_province="$province"
             fi
 
-            # 定义目标文件
             target_file="./ip/${target_province}${operator}.txt"
             touch "$target_file"
             # 去重追加
             if ! grep -xFq "$ip_port" "$target_file"; then
               echo "$ip_port" >> "$target_file"
               new_ip_count=$((new_ip_count + 1))
-              sort -u "$target_file" -o "$target_file"
             fi
-            # 避免接口请求过快被限制
-            sleep 0.3
-          done < gongdian_iptv.txt
+          done < rtp_unique.txt
+          
+          # 统一去重排序所有IP文件
+          for file in ./ip/*.txt; do
+            sort -u "$file" -o "$file"
+          done
           
           # 清理临时文件
-          rm -f gongdian_iptv.txt
-          # 输出统计信息
+          rm -f gongdian_iptv.txt rtp_unique.txt
+          # 输出统计
           echo "====================================="
           echo "📊 gongdian(rtp) IP 更新统计"
           echo "新增IP总数: $new_ip_count 条"
