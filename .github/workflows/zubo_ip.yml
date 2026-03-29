@@ -160,7 +160,7 @@ jobs:
             echo "  - $file: +${file_added[$file]} 条"
           done
           echo "====================================="
-      - name: 新增IP同步-4. 抓取gongdian并提取IP:端口（api.ip.sb高识别版）
+      - name: 新增IP同步-4. 抓取gongdian并提取IP:端口（带调试日志版）
         run: |
           # 初始化统计
           declare -A initial_counts
@@ -173,90 +173,105 @@ jobs:
           curl -L -A "okhttp/5.1.0" "$TARGET_URL" -o gongdian_iptv.txt 2>/dev/null
           [ ! -s gongdian_iptv.txt ] && echo "⚠️  源内容为空，跳过本步骤" && exit 0
 
-          # 提取去重host:port并导出到gongdian.txt（保留调试）
+          # 提取去重host:port并导出到gongdian.txt
           grep "rtp" gongdian_iptv.txt | grep -E "//([^/:]+):[0-9]+/rtp" | \
             grep -Eo "//([^/:]+:[0-9]+)/" | sed 's#//##;s#/##' | sort -u > gongdian.txt
-          echo "✅ 已导出个host:port到gongdian.txt，内容如下："
+          echo "✅ 已导出host:port到gongdian.txt："
           cat gongdian.txt
           [ ! -s gongdian.txt ] && echo "⚠️  无有效host:port，跳过" && exit 0
 
-          # 配置参数
+          # 英文省份 → 中文省份 映射表
+          declare -A region_map=(
+            ["Beijing"]="北京" ["Shanghai"]="上海" ["Tianjin"]="天津" ["Chongqing"]="重庆"
+            ["Hebei"]="河北" ["Shanxi"]="山西" ["Inner Mongolia"]="内蒙古" ["Liaoning"]="辽宁"
+            ["Jilin"]="吉林" ["Heilongjiang"]="黑龙江" ["Jiangsu"]="江苏" ["Zhejiang"]="浙江"
+            ["Anhui"]="安徽" ["Fujian"]="福建" ["Jiangxi"]="江西" ["Shandong"]="山东"
+            ["Henan"]="河南" ["Hubei"]="湖北" ["Hunan"]="湖南" ["Guangdong"]="广东"
+            ["Guangxi"]="广西" ["Hainan"]="海南" ["Sichuan"]="四川" ["Guizhou"]="贵州"
+            ["Yunnan"]="云南" ["Shaanxi"]="陕西" ["Gansu"]="甘肃" ["Qinghai"]="青海"
+            ["Ningxia"]="宁夏" ["Xinjiang"]="新疆" ["Xizang"]="西藏"
+          )
+
           CITY_LIST="北京 上海 天津 重庆"
           new_ip_count=0
 
-          # 逐个处理host:port（api.ip.sb识别）
           while IFS= read -r host_port; do
-            # 拆分host和端口
             host="${host_port%%:*}"
             port="${host_port##*:}"
             [ -z "$host" ] || [ -z "$port" ] && continue
 
-            # 1. 解析域名到公网IP（纯IP直接保留，域名解析）
+            # 1. 解析域名到IP
             if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               ip="$host"
             else
               ip=$(dig +short "$host" 2>/dev/null | head -n 1 | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$" || true)
             fi
-            [ -z "$ip" ] && continue
+            [ -z "$ip" ] && echo "⏭️  $host_port → 解析IP失败，跳过" && continue
 
-            # 2. 过滤内网/组播IP（只保留公网）
+            # 2. 过滤内网/组播IP
             if [[ "$ip" =~ ^(10\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[0-1]\.|192\.168\.|22[4-9]\.|23[0-9]\.) ]]; then
-              continue
+              echo "⏭️  $host_port → $ip 是内网/组播IP，跳过" && continue
             fi
             ip_port="${ip}:${port}"
 
-            # 3. 用api.ip.sb查询归属地（高识别率，超时3秒）
+            # 3. 调用 api.ip.sb
             ip_info=$(curl -s "https://api.ip.sb/geoip/$ip" \
               -A "okhttp/5.1.0" --connect-timeout 2 --max-time 3 2>/dev/null || true)
-            [ -z "$ip_info" ] && continue
+            [ -z "$ip_info" ] && echo "⏭️  $host_port → $ip 查询归属地失败，跳过" && continue
 
-            # 4. 提取省份/运营商（适配api.ip.sb返回格式，兼容中英文）
-            province=$(echo "$ip_info" | grep -o '"region":"[^"]*' | cut -d'"' -f4 || true)
+            # 4. 提取英文省份 + 映射为中文
+            en_region=$(echo "$ip_info" | grep -o '"region":"[^"]*' | cut -d'"' -f4 || true)
+            province="${region_map[$en_region]}"
+            [ -z "$province" ] && echo "⏭️  $host_port → $ip 省份识别失败（en_region=$en_region），跳过" && continue
+
+            # 5. 提取运营商
             isp=$(echo "$ip_info" | grep -o '"isp":"[^"]*' | cut -d'"' -f4 || true)
-            # 兼容中文省份别名（如"广东省"|"广东"）
-            province=$(echo "$province" | sed 's/省//;s/自治区//;s/直辖市//;s/特别行政区//')
-            [ -z "$province" ] || [ -z "$isp" ] && continue
+            org=$(echo "$ip_info" | grep -o '"organization":"[^"]*' | cut -d'"' -f4 || true)
+            isp_candidate="$isp $org"
 
-            # 5. 匹配三大运营商（精准识别，兼容模糊描述）
+            # 6. 匹配三大运营商
             operator=""
-            if echo "$isp" | grep -qi "电信|China Telecom"; then
+            if echo "$isp_candidate" | grep -qi "China Telecom|电信"; then
               operator="电信"
-            elif echo "$isp" | grep -qi "移动|China Mobile"; then
+            elif echo "$isp_candidate" | grep -qi "China Mobile|移动"; then
               operator="移动"
-            elif echo "$isp" | grep -qi "联通|China Unicom"; then
+            elif echo "$isp_candidate" | grep -qi "China Unicom|联通"; then
               operator="联通"
             else
-              continue
+              echo "⏭️  $host_port → $ip 运营商识别失败（isp_candidate=$isp_candidate），跳过" && continue
             fi
 
-            # 6. 修正直辖市名称（北京→北京市，保持文件命名统一）
+            # 7. 修正直辖市名称
             if echo " $CITY_LIST " | grep -q " $province "; then
               target_province="${province}市"
             else
               target_province="$province"
             fi
 
-            # 7. 写入IP:端口到对应文件（去重，和原有格式一致）
+            # 8. 写入前打印调试日志
+            echo "🔍 处理成功：$host_port → $ip_port | 省份=$province | 运营商=$operator | 目标文件=$(basename "$target_file")"
+
             target_file="./ip/${target_province}${operator}.txt"
             touch "$target_file"
             if ! grep -xFq "$ip_port" "$target_file"; then
               echo "$ip_port" >> "$target_file"
               new_ip_count=$((new_ip_count + 1))
+              echo "✅  新增：$ip_port → $(basename "$target_file")"
+            else
+              echo "ℹ️  已存在：$ip_port → $(basename "$target_file")，跳过"
             fi
 
-            # 轻量休眠，防止接口限流
             sleep 0.2
           done < gongdian.txt
 
-          # 统一去重排序所有IP文件，保证数据干净
+          # 统一去重
           for file in ./ip/*.txt; do
             sort -u "$file" -o "$file" 2>/dev/null || true
           done
 
-          # 清理临时文件（保留gongdian.txt）
           rm -f gongdian_iptv.txt
 
-          # 精准统计输出（和文件新增IP:端口完全对齐）
+          # 统计输出
           echo "====================================="
           echo "📊 gongdian(rtp) IP:端口 更新统计"
           echo "新增有效公网IP:端口总数: $new_ip_count 条"
