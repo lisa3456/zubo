@@ -13,14 +13,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - name: 原IP同步-1. 从kakaxi下载并解析 IPTV
+      - name: IP同步-1. 从kakaxi下载并解析 IPTV
         run: |
           declare -A initial_counts
           for file in ./ip/*.txt; do
             [ -f "$file" ] && initial_counts["$file"]=$(wc -l < "$file") || initial_counts["$file"]=0
           done
           curl -L https://github.com/kakaxi-1/IPTV/raw/refs/heads/main/iptv.txt -o iptv.txt
-          CITY_LIST="北京 上海 天津 重庆"
           new_ip_count=0
           while IFS= read -r line; do
             [[ -z "$line" ]] && continue
@@ -42,11 +41,8 @@ jobs:
             else
               continue
             fi
-            if echo " $CITY_LIST " | grep -q " $province_part "; then
-              target_province="${province_part}市"
-            else
-              target_province="$province_part"
-            fi
+            # 统一清洗省份名，移除省/市/自治区/特别行政区
+            target_province=$(echo "$province_part" | sed -e 's/省//g' -e 's/市//g' -e 's/自治区//g' -e 's/特别行政区//g')
             target_file="./ip/${target_province}${operator}.txt"
             touch "$target_file"
             if ! grep -xFq "$ip_port" "$target_file"; then
@@ -70,7 +66,7 @@ jobs:
             fi
           done
           echo "====================================="
-      - name: 原IP同步-2. 从 TV-yjc 同步IP（不覆盖）
+      - name: IP同步-2. 从 TV-yjc 同步IP
         run: |
           git add ip/
           git diff --staged > before.patch
@@ -79,13 +75,15 @@ jobs:
           cd ip
           while read src_file; do
             filename=$(basename "$src_file")
-            dest="$filename"
-            echo "正在处理: $filename"
+            # 清洗源文件名省份，移除省/市/自治区/特别行政区
+            clean_filename=$(echo "$filename" | sed -e 's/省//g' -e 's/市//g' -e 's/自治区//g' -e 's/特别行政区//g')
+            dest="$clean_filename"
+            echo "正在处理: $filename → 清洗后 $dest"
             if [ -f "$dest" ]; then
               grep -xFf "$dest" "$src_file" -v >> "$dest" || true
               awk '!seen[$0]++' "$dest" > "$dest.tmp" && mv "$dest.tmp" "$dest"
             else
-              cp "$src_file" .
+              cp "$src_file" "$dest"
             fi
             sed -i '/^[[:space:]]*#/d' "$dest"
             sed -i '/无可用IP/d' "$dest"
@@ -110,7 +108,7 @@ jobs:
             done
           echo "====================================="
           rm -f before.patch after.patch
-      - name: 原IP同步-3. 从 iptvz 同步电信/联通IP
+      - name: IP同步-3. 从 iptvz 同步电信/联通IP
         run: |
           declare -A initial_counts
           for file in ./ip/*.txt; do
@@ -119,7 +117,6 @@ jobs:
           git clone --depth 1 https://github.com/q1017673817/iptvz.git temp-iptvz
           mkdir -p ip
           cd ip
-          CITY_LIST="北京 天津 上海 重庆"
           total_added=0
           declare -A file_added
           while read src_file; do
@@ -127,11 +124,8 @@ jobs:
             base="${filename/_ip.txt/}"
             province_part="${base:0:2}"
             operator_part="${base:2}"
-            if echo " $CITY_LIST " | grep -q " $province_part "; then
-              target_province="${province_part}市"
-            else
-              target_province="$province_part"
-            fi
+            # 统一清洗省份名，移除所有后缀
+            target_province=$(echo "$province_part" | sed -e 's/省//g' -e 's/市//g' -e 's/自治区//g' -e 's/特别行政区//g')
             dest="${target_province}${operator_part}.txt"
             echo "处理: $filename → $dest"
             temp_file=$(mktemp)
@@ -160,30 +154,22 @@ jobs:
             echo "  - $file: +${file_added[$file]} 条"
           done
           echo "====================================="
-      - name: 新增IP同步-4. 抓取gongdian并提取IP:端口（域名保留原地址+最终完美版）
+      - name: IP同步-4. 抓取gongdian并提取IP
         run: |
-          # 初始化统计
           declare -A initial_counts
           for file in ./ip/*.txt; do
             [ -f "$file" ] && initial_counts["$file"]=$(wc -l < "$file") || initial_counts["$file"]=0
           done
           mkdir -p ip
-          # 抓取源内容
           TARGET_URL="https://gongdian.top/tv/guovin"
           curl -L -A "okhttp/5.1.0" "$TARGET_URL" -o gongdian_iptv.txt 2>/dev/null
           [ ! -s gongdian_iptv.txt ] && echo "⚠️  源内容为空，跳过本步骤" && exit 0
-          # 提取去重host:port并导出
           grep "rtp" gongdian_iptv.txt | grep -E "//([^/:]+):[0-9]+/rtp" | \
             grep -Eo "//([^/:]+:[0-9]+)/" | sed 's#//##;s#/##' | sort -u > gongdian.txt
           echo "✅ 已导出host:port到gongdian.txt，数量: $(wc -l < gongdian.txt)"
           cat gongdian.txt
           [ ! -s gongdian.txt ] && echo "⚠️  无有效host:port，跳过" && exit 0
-          # 配置参数
-          CITY_LIST="北京 上海 天津 重庆"
           new_ip_count=0
-          # ==============================================
-          # 英文/拼音省份 → 中文省份 映射表
-          # ==============================================
           declare -A region_en2cn=(
             ["Beijing"]="北京" ["Shanghai"]="上海" ["Tianjin"]="天津" ["Chongqing"]="重庆"
             ["Hebei"]="河北" ["Shanxi"]="山西" ["Inner Mongolia"]="内蒙古" ["Liaoning"]="辽宁"
@@ -195,52 +181,36 @@ jobs:
             ["Ningxia"]="宁夏" ["Xinjiang"]="新疆" ["Xizang"]="西藏" ["Hong Kong"]="香港" ["Macau"]="澳门"
             ["Shanxi"]="山西" ["Xianggang"]="香港" ["Aomen"]="澳门"
           )
-          # ==============================================
-          # 运营商识别：先匹配联通/移动，再匹配电信（修复netw误判）
-          # ==============================================
           match_isp_by_api() {
             local isp_raw=$1
             isp_raw=$(echo "$isp_raw" | tr 'A-Z' 'a-z')
-            # 优先匹配联通/移动，避免含Network的联通ISP被误判为电信
             if [[ $isp_raw =~ unicom|cu|chinaunicom|china169 ]]; then
               echo "联通"
             elif [[ $isp_raw =~ mobile|cm|chinamobile ]]; then
               echo "移动"
-            # 最后匹配电信，保留所有电信标识
             elif [[ $isp_raw =~ telecom|ct|chinatelecom|chinanet|netw ]]; then
               echo "电信"
             else
               echo "未知"
             fi
           }
-          # ==============================================
-          # 阶段2：IP段正则匹配兜底（完全复刻Python的正则规则）
-          # ==============================================
           match_isp_by_regex() {
             local ip=$1
-            # 电信IP段
             if [[ $ip =~ ^(1[0-9]{2}|2[0-3]{2}|42|43|58|59|60|61|110|111|112|113|114|115|116|117|118|119|120|121|122|123|124|125|126|127|175|180|182|183|184|185|186|187|188|189|223)\. ]]; then
               echo "电信"
-            # 联通IP段（复刻Python正则）
             elif [[ $ip =~ ^(42|43|58|59|60|61|110|111|112|113|114|115|116|117|118|119|120|121|122|123|124|125|126|127|175|180|182|183|184|185|186|187|188|189|223)\. ]]; then
               echo "联通"
-            # 移动IP段（复刻Python正则）
             elif [[ $ip =~ ^(223|36|37|38|39|100|101|102|103|104|105|106|107|108|109|134|135|136|137|138|139|150|151|152|157|158|159|170|178|182|183|184|187|188|189)\. ]]; then
               echo "移动"
             else
               echo "未知"
             fi
           }
-          # ==============================================
-          # IP查询函数（ip-api.com重试+api.ip.sb备用接口）
-          # ==============================================
           get_ip_info() {
             local ip=$1
-            # ip-api.com重试2次，每次间隔2秒
             for i in {1..2}; do
               local info=$(curl -s "http://ip-api.com/json/${ip}?lang=zh-CN" \
                 -A "okhttp/5.1.0" --connect-timeout 5 --max-time 10 2>/dev/null || true)
-              # 验证是否查询成功（包含status:success）
               if [ -n "$info" ] && echo "$info" | grep -q '"status":"success"'; then
                 echo "$info"
                 return 0
@@ -248,40 +218,30 @@ jobs:
               echo "⚠️  ip-api.com 第 $i 次查询失败，2秒后重试..."
               sleep 2
             done
-            # ip-api.com重试失败，切换到api.ip.sb备用接口
             echo "⚠️  ip-api.com 重试失败，切换至备用接口 api.ip.sb 查询"
             local sb_info=$(curl -s "https://api.ip.sb/geoip/$ip" \
               -A "okhttp/5.1.0" --connect-timeout 5 --max-time 10 2>/dev/null || true)
             if [ -n "$sb_info" ] && echo "$sb_info" | grep -q '"region"'; then
-              # 提取备用接口的省份和运营商，转成ip-api.com风格格式
               local region=$(echo "$sb_info" | grep -o '"region":"[^"]*' | cut -d'"' -f4 || true)
               local isp=$(echo "$sb_info" | grep -o '"isp":"[^"]*' | cut -d'"' -f4 || true)
-              # 兼容备用接口空值情况
               [ -z "$region" ] && region="未知"
               [ -z "$isp" ] && isp="未知"
               echo "{\"regionName\":\"${region}\",\"isp\":\"${isp}\"}"
               return 0
             fi
-            # 所有接口查询失败
             echo ""
             return 1
           }
-          # ==============================================
-          # 逐个处理host:port（核心：域名保留原地址，仅纯IP解析）
-          # ==============================================
           while IFS= read -r host_port; do
             host="${host_port%%:*}"
             port="${host_port##*:}"
             [ -z "$host" ] || [ -z "$port" ] && continue
             echo -e "\n🔧 开始处理：$host_port"
-            # 核心区分：纯IP vs 域名
             if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              # 纯IP：用原IP做归属地查询，写入原IP:port
               query_ip="$host"
               write_addr="$host_port"
               echo "ℹ️  纯IP地址，直接使用：$query_ip"
             else
-              # 域名：解析IP仅用于归属地查询，写入原域名:port（不解析）
               query_ip=$(dig +short "$host" 2>/dev/null | head -n 1 | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$" || true)
               write_addr="$host_port"
               if [ -z "$query_ip" ]; then
@@ -291,37 +251,29 @@ jobs:
               echo "🌐 域名解析IP（仅用于归属地查询）：$host → $query_ip"
               echo "ℹ️  写入文件将保留原域名：$write_addr"
             fi
-            # 2. 过滤内网/组播IP（仅针对查询用的IP）
             if [[ "$query_ip" =~ ^(10\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[0-1]\.|192\.168\.|22[4-9]\.|23[0-9]\.) ]]; then
               echo "❌ 查询IP为内网/组播IP，跳过：$query_ip"
               continue
             fi
-            # 3. 调用封装的IP查询函数（用解析的IP查归属地）
             ip_info=$(get_ip_info "$query_ip")
             if [ -z "$ip_info" ]; then
               echo "❌ 所有接口查询失败，跳过"
               continue
             fi
-            # ==============================================
-            # 省份提取+英文转中文+去省留市
-            # ==============================================
             province=$(echo "$ip_info" | grep -o '"regionName":"[^"]*' | cut -d'"' -f4 || true)
-            # 第一步：英文/拼音省份自动转中文
             if [[ -v "region_en2cn[$province]" ]]; then
               province_cn="${region_en2cn[$province]}"
               echo "ℹ️  英文省份转中文：$province → $province_cn"
               province="$province_cn"
             fi
-            # 第二步：清洗省份 - 仅去掉省/自治区/特别行政区，保留市字
-            province=$(echo "$province" | sed -e 's/省//g' -e 's/自治区//g' -e 's/特别行政区//g')
+            # 统一清洗省份名，移除省/市/自治区/特别行政区
+            province=$(echo "$province" | sed -e 's/省//g' -e 's/市//g' -e 's/自治区//g' -e 's/特别行政区//g')
             echo "ℹ️  清洗后最终省份：$province"
-            # 空值/未知判断
             if [ -z "$province" ] || [ "$province" = "null" ] || [ "$province" = "未知" ]; then
               province="未知"
               echo "⚠️  接口未返回省份，设为：未知"
               continue
             fi
-            # 5. 提取isp并双阶段识别
             isp_raw=$(echo "$ip_info" | grep -o '"isp":"[^"]*' | cut -d'"' -f4 || true)
             isp=$(match_isp_by_api "$isp_raw")
             echo "ℹ️  阶段1-接口识别运营商：$isp（原始isp：$isp_raw）"
@@ -330,14 +282,8 @@ jobs:
               echo "ℹ️  阶段2-IP段正则兜底：$isp"
             fi
             [ "$isp" = "未知" ] && echo "❌ 双阶段识别运营商失败，跳过" && continue
-            # 6. 修正直辖市名称（北京→北京市，匹配ip/文件命名）
-            if echo " $CITY_LIST " | grep -q " $province "; then
-              target_province="${province}市"
-              echo "ℹ️  直辖市修正：$province → $target_province"
-            else
-              target_province="$province"
-            fi
-            # 7. 写入文件：域名保留原域名:port，纯IP保留原IP:port
+            # 直接使用清洗后的纯省份名
+            target_province="$province"
             target_file="./ip/${target_province}${isp}.txt"
             touch "$target_file"
             if ! grep -xFq "$write_addr" "$target_file"; then
@@ -347,16 +293,12 @@ jobs:
             else
               echo "ℹ️  已存在，跳过：$write_addr → $(basename "$target_file")"
             fi
-            # 延长休眠至1秒，彻底避免ip-api.com限流
             sleep 1
           done < gongdian.txt
-          # 统一去重排序所有IP文件
           for file in ./ip/*.txt; do
             sort -u "$file" -o "$file" 2>/dev/null || true
           done
-          # 清理临时文件
           rm -f gongdian_iptv.txt
-          # 最终统计输出（和文件新增完全对齐）
           echo -e "\n====================================="
           echo "📊 gongdian(rtp) IP:端口 更新统计"
           echo "新增有效地址总数: $new_ip_count 条（域名保留原地址，纯IP保留原IP）"
