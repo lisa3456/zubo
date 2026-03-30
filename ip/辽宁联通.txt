@@ -1,1 +1,4 @@
 116.2.175.132:4010
+image.ayemovie.top:5555
+iptv.ayemovie.top:5555
+op.ayemovie.top:5555
