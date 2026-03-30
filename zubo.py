@@ -12,8 +12,9 @@ IP_DIR = "ip"
 RTP_DIR = "rtp"
 ZUBO_FILE = "zubo.txt"
 IPTV_FILE = "IPTV.txt"
+
 # ===============================
-# 分类与映射配置（原逻辑无改动）
+# 分类与映射配置
 CHANNEL_CATEGORIES = {
     "央视": [
         "CCTV1", "CCTV2", "CCTV3", "CCTV4", "CCTV5", "CCTV5+", "CCTV6", "CCTV7",
@@ -27,7 +28,7 @@ CHANNEL_CATEGORIES = {
     ],
     "数字": [
         "CHC动作电影", "CHC家庭影院", "CHC影迷电影", "淘电影", "淘剧场", "淘娱乐", "东方影视", 
-        "风云剧场", "怀旧剧场", "第一剧场", "都市剧场", "欢笑剧场", "中国教育1台", 
+        "风云剧场", "怀旧剧场", "第一剧场", "都市剧场", "欢笑剧场", 
         "iHOT爱历史", "iHOT爱谍战", "iHOT爱悬疑", "iHOT爱旅行",
         "华数热播剧场", "华数军旅剧场", "华数谍战剧场", "华数城市剧场", "华数古装剧场", "华数魅力时尚",
         "兵器科技", "风云音乐", "风云足球", "女性时尚", "世界地理", "央视台球", "高尔夫网球",
@@ -36,6 +37,7 @@ CHANNEL_CATEGORIES = {
         "星空卫视", "凤凰卫视中文台", "凤凰卫视资讯台", "凤凰卫视香港台", "凤凰卫视电影台"
     ],
 }
+
 # ===== 映射（别名 -> 标准名）=====
 CHANNEL_MAPPING = {
     "CCTV1": ["CCTV-1", "CCTV-1 HD", "CCTV1 HD", "CCTV-1综合"],
@@ -137,8 +139,9 @@ CHANNEL_MAPPING = {
     "华数城市剧场": ["城市剧场", "IPTV城市剧场"],   
     "华数魅力时尚": ["魅力时尚", "IPTV魅力时尚"],
 }
+
 # ===============================
-# 计数文件操作（原逻辑无改动）
+# 计数文件操作
 def get_run_count():
     if os.path.exists(COUNTER_FILE):
         try:
@@ -153,13 +156,15 @@ def save_run_count(count):
             f.write(str(count))
     except Exception as e:
         print(f"⚠️ 写计数文件失败：{e}")
+
 # ===============================
 # 顶层更新计数，程序启动即自增
 run_count = get_run_count() + 1
 save_run_count(run_count)
 print(f"📌 本次程序运行次数：{run_count}")
+
 # ===============================
-# 新第一阶段：生成zubo.txt组合链接（原第二阶段）
+# 第一阶段：生成zubo.txt组合链接
 def first_stage():
     print("🔔 第一阶段触发：生成 zubo.txt")
     if not os.path.exists(IP_DIR):
@@ -209,13 +214,15 @@ def first_stage():
         print(f"🎯 第一阶段完成，写入 {len(unique)} 条记录")
     except Exception as e:
         print(f"❌ 写文件失败：{e}")
+
 # ===============================
-# 新第二阶段：多线程检测频道并生成IPTV.txt（原第三阶段）
+# 第二阶段：多线程检测频道并生成IPTV.txt
 def second_stage():
     print("🧩 第二阶段：多线程检测代表频道生成 IPTV.txt，准备可播放IP数据")
     if not os.path.exists(ZUBO_FILE):
         print("⚠️ zubo.txt 不存在，跳过第二阶段")
         return None
+
     def check_stream(url, timeout=10):
         try:
             result = subprocess.run(
@@ -227,11 +234,13 @@ def second_stage():
             return b"codec_type" in result.stdout
         except Exception:
             return False
+
     # 别名映射
     alias_map = {}
     for main_name, aliases in CHANNEL_MAPPING.items():
         for alias in aliases:
             alias_map[alias] = main_name
+
     # 读取IP-运营商映射
     ip_info = {}
     if os.path.exists(IP_DIR):
@@ -247,6 +256,7 @@ def second_stage():
                             ip_info[ip_port] = province_operator
             except Exception as e:
                 print(f"⚠️ 读取 {fname} 失败：{e}")
+
     # 按IP分组频道
     groups = {}
     with open(ZUBO_FILE, encoding="utf-8") as f:
@@ -260,6 +270,7 @@ def second_stage():
                 continue
             ip_port = m.group(1)
             groups.setdefault(ip_port, []).append((ch_main, url))
+
     # 多线程检测可播放IP
     def detect_ip(ip_port, entries):
         rep_channels = [u for c, u in entries if c == "CCTV1"]
@@ -267,7 +278,8 @@ def second_stage():
             rep_channels = [entries[0][1]]
         playable = any(check_stream(u, timeout=10) for u in rep_channels)
         return ip_port, playable
-    print(f"🚀 启动多线程检测（共 {len(groups)} 个 IP）...")
+
+    print(f"🚀 启动多线程检测（共 {len(groups)} 个 IP/域名）...")
     playable_ips = set()
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(detect_ip, ip, chs): ip for ip, chs in groups.items()}
@@ -279,42 +291,67 @@ def second_stage():
                 continue
             if ok:
                 playable_ips.add(ip_port)
-    print(f"✅ 检测完成，可播放 IP 共 {len(playable_ips)} 个")
-    # 按优先级收集频道线路
+
+    print(f"✅ 检测完成，可播放 IP/域名 共 {len(playable_ips)} 个")
+
+    # 域名判断函数：判定是否为域名（最高优先级）
+    def is_domain(addr):
+        # 匹配纯IP格式（含端口），排除后含点的判定为域名
+        ip_pattern = re.compile(r'^\d+\.\d+\.\d+\.\d+(:\d+)?$')
+        if ip_pattern.match(addr):
+            return False
+        return '.' in addr and not addr.replace('.', '').isdigit()
+
+    # 按优先级收集频道线路：域名 > 北京/上海/四川IP > 普通IP
     channel_lines = {}
     operator_playable_ips = {}
     priority_provinces = {"北京", "上海", "四川"}
     for ip_port in playable_ips:
         operator = ip_info.get(ip_port, "未知")
         operator_playable_ips.setdefault(operator, set()).add(ip_port)
+        # 优先级判定
+        is_domain_addr = is_domain(ip_port)
         is_priority = any(prov in operator for prov in priority_provinces)
         for c, u in groups.get(ip_port, []):
             key = f"{c},{u}${operator}"
             if c not in channel_lines:
-                channel_lines[c] = {"priority": [], "normal": []}
-            if is_priority:
+                # 新增domain层级，优先级从高到低：domain > priority > normal
+                channel_lines[c] = {"domain": [], "priority": [], "normal": []}
+            if is_domain_addr:
+                channel_lines[c]["domain"].append(key)
+            elif is_priority:
                 channel_lines[c]["priority"].append(key)
             else:
                 channel_lines[c]["normal"].append(key)
-    # 合并线路（最多50条）
+
+    # 合并线路（最多50条）：域名先取，剩余名额取优先级IP，最后取普通IP
     valid_lines = []
     for ch, heap_dict in channel_lines.items():
+        domain_list = heap_dict["domain"]
         prio_list = heap_dict["priority"]
         norm_list = heap_dict["normal"]
-        take_prio = len(prio_list)
-        take_norm = 50 - take_prio
-        selected = prio_list[:50] + norm_list[:take_norm] if take_norm > 0 else prio_list[:50]
+        # 计算各层级可取值数，保证总数≤50
+        take_domain = min(len(domain_list), 50)
+        remain = 50 - take_domain
+        take_prio = min(len(prio_list), remain) if remain > 0 else 0
+        remain = remain - take_prio
+        take_norm = min(len(norm_list), remain) if remain > 0 else 0
+        # 按优先级合并
+        selected = domain_list[:take_domain] + prio_list[:take_prio] + norm_list[:take_norm]
         valid_lines.extend(selected)
-    print(f"✅ 已限制：每个频道最多保留 50 条线路，优先北京、上海、四川IP")
+
+    print(f"✅ 已限制：每个频道最多保留 50 条线路，优先域名，其次北京、上海、四川IP")
+
     # 生成IPTV.txt
     beijing_now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
     bj_count = sum(1 for ip in playable_ips if "北京" in ip_info.get(ip, ""))
     sh_count = sum(1 for ip in playable_ips if "上海" in ip_info.get(ip, ""))
     sc_count = sum(1 for ip in playable_ips if "四川" in ip_info.get(ip, ""))
+    domain_count = sum(1 for ip in playable_ips if is_domain(ip))
     try:
         with open(IPTV_FILE, "w", encoding="utf-8") as f:
             f.write(f"更新时间: {beijing_now}\n")
-            f.write(f"可播放IP共{len(playable_ips)}个（北京{bj_count}个、上海{sh_count}个、四川{sc_count}个）\n\n")
+            f.write(f"可播放IP/域名共{len(playable_ips)}个（域名{domain_count}个、北京{bj_count}个、上海{sh_count}个、四川{sc_count}个）\n\n")
             for category, ch_list in CHANNEL_CATEGORIES.items():
                 f.write(f"{category},#genre#\n")
                 for ch in ch_list:
@@ -326,9 +363,11 @@ def second_stage():
         print(f"🎯 IPTV.txt 生成完成，共 {len(valid_lines)} 条频道")
     except Exception as e:
         print(f"❌ 写 IPTV.txt 失败：{e}")
+
     return operator_playable_ips
+
 # ===============================
-# 新第三阶段：写回可用IP到ip目录（原第四阶段）
+# 第三阶段：写回可用IP到ip目录
 def third_stage(operator_playable_ips):
     if not operator_playable_ips:
         print("⚠️ 无可用IP数据，跳过第三阶段")
@@ -344,8 +383,9 @@ def third_stage(operator_playable_ips):
         except Exception as e:
             print(f"❌ 写回 {target_file} 失败：{e}")
     print("✅ 第三阶段完成：所有可用IP已覆盖写入ip目录")
+
 # ===============================
-# 文件推送（原逻辑无改动）
+# 文件推送
 def push_all_files():
     print("🚀 推送所有更新文件到 GitHub...")
     try:
@@ -358,19 +398,20 @@ def push_all_files():
     os.system("git add IPTV.txt || true")
     os.system('git commit -m "自动更新：计数、IP文件、IPTV.txt" || echo "⚠️ 无需提交"')
     os.system("git push origin main || echo '⚠️ 推送失败'")
+
 # ===============================
-# 主执行逻辑【核心修改：新一/二阶段必执行，三阶段5的倍数轮触发】
+# 主执行逻辑【一/二阶段必执行，三阶段5的倍数轮触发】
 if __name__ == "__main__":
     # 确保基础目录存在
     os.makedirs(IP_DIR, exist_ok=True)
     os.makedirs(RTP_DIR, exist_ok=True)
     
-    # 新一阶段：生成zubo.txt 【每次运行必执行】
+    # 一阶段：生成zubo.txt 【每次运行必执行】
     first_stage()
-    # 新二阶段：检测频道+生成IPTV.txt 【每次运行必执行】
+    # 二阶段：检测频道+生成IPTV.txt 【每次运行必执行】
     operator_playable_ips = second_stage()
     
-    # 新三阶段：写回可用IP 【仅运行次数为5的倍数时触发】
+    # 三阶段：写回可用IP 【仅运行次数为5的倍数时触发】
     if run_count % 5 == 0:
         third_stage(operator_playable_ips)
     else:
