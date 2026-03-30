@@ -1,0 +1,81 @@
+name: zubo_ip_sh
+on:
+  schedule:
+    - cron: '0 15 * * *'
+  workflow_dispatch:
+
+jobs:
+  ip-fofa1:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout 仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: FOFA爬取-任务3（上海电信）
+        env:
+          FOFA_URL: "https://fofa.info/result?qbase64=InVkcHh5IiAmJiBjb3VudHJ5PSJDTiIgJiYgcmVnaW9uPSJTaGFuZ2hhaSIgJiYgb3JnPSJDaGluYSBUZWxlY29tIEdyb3VwIg=="
+          FOFA_DESC: "FOFA链接3"
+          FIXED_PROVINCE: "上海"
+          FIXED_ISP: "电信"
+        run: |
+          echo "📡 开始执行${{ env.FOFA_DESC }}爬取（固定归属：${{ env.FIXED_PROVINCE }}${{ env.FIXED_ISP }}）"
+          mkdir -p ip
+          all_ips=$(curl -sL --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
+            --referer "https://fofa.info/" ${{ env.FOFA_URL }} | grep -oE '<a href="http://([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]+)"' | cut -d'/' -f3 | sed 's/"$//' | sort -u)
+          if [ -z "$all_ips" ]; then
+            echo "❌ 未爬取到任何IP，跳过后续处理"
+            exit 0
+          fi
+          crawl_count=$(echo "$all_ips" | wc -l)
+          echo "✅ 初步爬取到IP数量：$crawl_count 个"
+          
+          total_new=0
+          target_file="ip/${{ env.FIXED_PROVINCE }}${{ env.FIXED_ISP }}.txt"
+          touch "$target_file"
+          
+          while IFS= read -r ip_port; do
+            if ! grep -xFq "$ip_port" "$target_file" 2>/dev/null; then
+              echo "$ip_port" >> "$target_file"
+              total_new=$((total_new + 1))
+            fi
+          done <<< "$all_ips"
+          
+          sort -u "$target_file" -o "$target_file"
+          
+          echo "====================================="
+          echo "📊 ${{ env.FOFA_DESC }} IP 更新统计"
+          echo "爬取IP总数: $crawl_count 条"
+          echo "固定写入文件: $(basename "$target_file")"
+          echo "更新文件列表:"
+          if [ $total_new -gt 0 ]; then
+            echo "  - $(basename "$target_file"): +$total_new 条"
+          else
+            echo "  - 无新增IP"
+          fi
+          echo "新增IP总数: $total_new 条"
+          echo "====================================="
+          echo "🎉 ${{ env.FOFA_DESC }}爬取完成，已写入${{ env.FIXED_PROVINCE }}${{ env.FIXED_ISP }}.txt"
+
+      - name: 提交并推送FOFA3更新
+        if: always()
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add ip/
+          if git diff --staged --quiet; then
+            echo "✅ 无FOFA3 IP更新，无需提交"
+          else
+            if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+              commit_msg="手动触发-上海电信FOFA3 IP爬取更新"
+            else
+              commit_msg="定时触发-上海电信FOFA3 IP爬取更新"
+            fi
+            git commit -m "$commit_msg"
+            git push
+            echo "✅ 已提交推送上海电信FOFA3 IP更新"
+          fi
