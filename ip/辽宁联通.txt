@@ -2,3 +2,4 @@
 image.ayemovie.top:5555
 iptv.ayemovie.top:5555
 op.ayemovie.top:5555
+101.wifi98.com:9001
