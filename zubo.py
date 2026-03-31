@@ -412,7 +412,7 @@ if __name__ == "__main__":
     operator_playable_ips = second_stage()
     
     # 三阶段：写回可用IP 【仅运行次数为5的倍数时触发】
-    if run_count % 5 == 0:
+    if run_count % 30 == 0:
         third_stage(operator_playable_ips)
     else:
         print(f"ℹ️ 当前轮次{run_count}，未达到5的倍数，跳过第三阶段")
