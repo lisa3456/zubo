@@ -45,3 +45,4 @@ r.xace.fun:4999
 otangtang.com:38848
 joyznm.i234.me:20000
 222.128.26.62:4001
+naslmd2.myqnapcloud.com:4022
