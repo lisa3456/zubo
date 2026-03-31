@@ -4,3 +4,4 @@
 61.55.222.158:4022
 nas.zangxiaodou.cn:4022
 zangxiaodou.softether.net:4022
+www.liyajun.top:7088
