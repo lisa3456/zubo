@@ -400,13 +400,13 @@ def third_stage(operator_ip_map, playable_ips):
     if not operator_ip_map or not ip_info:
         print("⚠️ 无IP数据，跳过第三阶段")
         return
-
     print(f"\n📤 【第三阶段】开始清理IP池（连续失败≥{MAX_FAILED_TIMES}次直接删除）")
     
     failed_count = load_failed_count()
     province_map = {}
     deleted_ips = []
     
+    # 【修复1】：先遍历所有IP，初始化省份映射（和原来一致）
     for ip, operator in ip_info.items():
         cnt = failed_count.get(ip, 0)
         if ip in playable_ips or cnt < MAX_FAILED_TIMES:
@@ -421,8 +421,11 @@ def third_stage(operator_ip_map, playable_ips):
     else:
         print("✅ 暂无达到删除阈值的IP")
 
-    # 2. 强制写入空文件占位
-    for operator, ip_list in province_map.items():
+    # 【修复2】：循环「所有运营商」（operator_ip_map.keys()），而非仅有IP的运营商
+    # 关键：确保空运营商（如上海联通）也会进入循环执行写入
+    for operator in operator_ip_map.keys():
+        # 取该运营商下保留的IP列表，无IP则为空列表
+        ip_list = province_map.get(operator, [])
         safe_fn = operator.replace("/", "_").replace("\\", "_").replace(":", "_") + ".txt"
         path = os.path.join(IP_DIR, safe_fn)
         
@@ -434,10 +437,10 @@ def third_stage(operator_ip_map, playable_ips):
                     for ip in sorted(set(ip_list)):
                         f.write(ip + "\n")
                 else:
-                    # 🔥 如果没IP，写占位符
+                    # 🔥 空IP必写占位符，Git必提交
                     f.write("# 暂无有效IP\n") 
             
-            # 根据是否有IP，调整日志显示
+            # 【修复3】：日志适配空列表
             if ip_list:
                 print(f"✅ 已重建：{operator}.txt (保留 {len(ip_list)} 个)")
             else:
