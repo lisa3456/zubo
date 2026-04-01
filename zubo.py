@@ -406,7 +406,7 @@ def third_stage(operator_ip_map, playable_ips):
     province_map = {}
     deleted_ips = []
     
-    # 【修复1】：先遍历所有IP，初始化省份映射（和原来一致）
+    # 遍历所有IP，初始化省份映射
     for ip, operator in ip_info.items():
         cnt = failed_count.get(ip, 0)
         if ip in playable_ips or cnt < MAX_FAILED_TIMES:
@@ -421,8 +421,7 @@ def third_stage(operator_ip_map, playable_ips):
     else:
         print("✅ 暂无达到删除阈值的IP")
 
-    # 【修复2】：循环「所有运营商」（operator_ip_map.keys()），而非仅有IP的运营商
-    # 关键：确保空运营商（如上海联通）也会进入循环执行写入
+    # 循环「所有运营商」（operator_ip_map.keys()），而非仅有IP的运营商
     for operator in operator_ip_map.keys():
         # 取该运营商下保留的IP列表，无IP则为空列表
         ip_list = province_map.get(operator, [])
