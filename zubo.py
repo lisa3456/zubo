@@ -421,29 +421,32 @@ def third_stage(operator_ip_map, playable_ips):
     else:
         print("✅ 暂无达到删除阈值的IP")
 
-    # 2. 强制覆盖写入
+    # 2. 强制写入空文件占位
     for operator, ip_list in province_map.items():
         safe_fn = operator.replace("/", "_").replace("\\", "_").replace(":", "_") + ".txt"
         path = os.path.join(IP_DIR, safe_fn)
         
-        # 如果文件存在，先强制删除它！
-        if os.path.exists(path):
-            try:
-                os.remove(path)
-                print(f"🗑️  已清理旧文件：{safe_fn}")
-            except Exception as e:
-                print(f"⚠️ 无法删除旧文件{path}：{e}")
-        
-        # 重新创建文件并写入
         try:
+            # 直接覆盖写入！不管有没有IP，都强制重写文件
             with open(path, "w", encoding="utf-8") as f:
-                for ip in sorted(set(ip_list)):
-                    f.write(ip + "\n")
-            print(f"✅ 已重建：{operator}.txt (保留 {len(ip_list)} 个)")
+                if ip_list:
+                    # 有IP：正常写入
+                    for ip in sorted(set(ip_list)):
+                        f.write(ip + "\n")
+                else:
+                    # 🔥 如果没IP，写占位符
+                    f.write("# 暂无有效IP\n") 
+            
+            # 根据是否有IP，调整日志显示
+            if ip_list:
+                print(f"✅ 已重建：{operator}.txt (保留 {len(ip_list)} 个)")
+            else:
+                print(f"⚠️ 已置空：{operator}.txt (暂无有效IP)")
+                
         except Exception as e:
-            print(f"❌ 创建失败{operator}.txt: {e}")
+            print(f"❌ 写入失败{operator}.txt: {e}")
     
-    # 3. 清理计数文件
+    # 3. 同步清理计数文件
     all_survived_ips = set(ip for lst in province_map.values() for ip in lst)
     new_failed_count = {ip: cnt for ip, cnt in failed_count.items() if ip in all_survived_ips}
     save_failed_count(new_failed_count)
