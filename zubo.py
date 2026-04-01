@@ -395,57 +395,60 @@ def second_stage():
     return operator_ip_map, playable_ips
 
 # ================= 第三阶段：删除≥3次失败的IP =================
-def third_stage(operator_all_ips, playable_ips):
+def third_stage(operator_ip_map, playable_ips):
     global ip_info
-    if not operator_all_ips or not ip_info:
+    if not operator_ip_map or not ip_info:
         print("⚠️ 无IP数据，跳过第三阶段")
         return
 
     print(f"\n📤 【第三阶段】开始清理IP池（连续失败≥{MAX_FAILED_TIMES}次直接删除）")
     
     failed_count = load_failed_count()
-    # 1. 遍历所有IP，筛选出要保留的
     province_map = {}
     deleted_ips = []
     
     for ip, operator in ip_info.items():
         cnt = failed_count.get(ip, 0)
         if ip in playable_ips or cnt < MAX_FAILED_TIMES:
-            # 保留
             province_map.setdefault(operator, []).append(ip)
         else:
-            # 彻底删除
             deleted_ips.append((ip, operator, cnt))
     
-    # 打印删除结果
+    # 打印删除日志
     if deleted_ips:
         for ip, op, cnt in deleted_ips:
             print(f"🔴 彻底删除 IP {ip}（{op}）- 连续失败{cnt}次")
     else:
         print("✅ 暂无达到删除阈值的IP")
 
-    # 2. 强制覆盖写入每个省份/运营商文件
+    # 2. 强制覆盖写入
     for operator, ip_list in province_map.items():
-        # 处理特殊字符
         safe_fn = operator.replace("/", "_").replace("\\", "_").replace(":", "_") + ".txt"
         path = os.path.join(IP_DIR, safe_fn)
         
+        # 如果文件存在，先强制删除它！
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                print(f"🗑️  已清理旧文件：{safe_fn}")
+            except Exception as e:
+                print(f"⚠️ 无法删除旧文件{path}：{e}")
+        
+        # 重新创建文件并写入
         try:
-            # 打开文件，直接覆盖写入！！核心保证
             with open(path, "w", encoding="utf-8") as f:
-                # 去重+排序写入，保持文件整洁
                 for ip in sorted(set(ip_list)):
                     f.write(ip + "\n")
-            print(f"✅ 已强制更新：{operator}.txt (保留 {len(ip_list)} 个)")
+            print(f"✅ 已重建：{operator}.txt (保留 {len(ip_list)} 个)")
         except Exception as e:
-            print(f"❌ 写入失败 {operator}.txt: {e}")
+            print(f"❌ 创建失败{operator}.txt: {e}")
     
-    # 3. 清理计数文件中已经被物理删除的IP
+    # 3. 清理计数文件
     all_survived_ips = set(ip for lst in province_map.values() for ip in lst)
     new_failed_count = {ip: cnt for ip, cnt in failed_count.items() if ip in all_survived_ips}
     save_failed_count(new_failed_count)
     
-    print(f"🔚 第三阶段完成。ip目录与计数文件已同步清理。")
+    print(f"🔚 第三阶段完成。")
 
 # ================= 文件推送到GitHub =================
 def push_all_files():
