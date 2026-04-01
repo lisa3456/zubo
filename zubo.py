@@ -395,53 +395,57 @@ def second_stage():
     return operator_ip_map, playable_ips
 
 # ================= 第三阶段：删除≥3次失败的IP =================
-def third_stage(operator_ip_map, playable_ips):
+def third_stage(operator_all_ips, playable_ips):
     global ip_info
-    print("\n📤 【第三阶段】开始清理IP池（连续失败≥3次直接删除）")
-    if not operator_ip_map or not ip_info:
+    if not operator_all_ips or not ip_info:
         print("⚠️ 无IP数据，跳过第三阶段")
         return
+
+    print(f"\n📤 【第三阶段】开始清理IP池（连续失败≥{MAX_FAILED_TIMES}次直接删除）")
     
     failed_count = load_failed_count()
-    # 按省份/运营商分组，只保留【连续失败<3次】或【本次可播放】的IP
-    province_reserved_ips = {}
+    # 1. 遍历所有IP，筛选出要保留的
+    province_map = {}
     deleted_ips = []
-    for ip_port, operator in ip_info.items():
-        cnt = failed_count.get(ip_port, 0)
-        # 保留条件：本次可播放 OR 连续失败<3次
-        if ip_port in playable_ips or cnt < MAX_FAILED_TIMES:
-            province_reserved_ips.setdefault(operator, []).append(ip_port)
-        else:
-            deleted_ips.append((ip_port, operator, cnt))
     
-    # 打印删除日志
+    for ip, operator in ip_info.items():
+        cnt = failed_count.get(ip, 0)
+        if ip in playable_ips or cnt < MAX_FAILED_TIMES:
+            # 保留
+            province_map.setdefault(operator, []).append(ip)
+        else:
+            # 彻底删除
+            deleted_ips.append((ip, operator, cnt))
+    
+    # 打印删除结果
     if deleted_ips:
         for ip, op, cnt in deleted_ips:
-            print(f"🔴 已删除 {ip}（{op}）- 连续失败{cnt}次，达到删除阈值")
+            print(f"🔴 彻底删除 IP {ip}（{op}）- 连续失败{cnt}次")
     else:
-        print("✅ 暂无连续失败≥3次的IP，无需删除")
-    
-    # 覆盖写入ip目录下的省份/运营商文件
-    for operator, ip_list in province_reserved_ips.items():
-        target_file = os.path.join(IP_DIR, f"{operator}.txt")
-        # 处理文件名特殊字符，避免创建失败
-        target_file = target_file.replace("/", "_").replace("\\", "_").replace(":", "_")
+        print("✅ 暂无达到删除阈值的IP")
+
+    # 2. 强制覆盖写入每个省份/运营商文件
+    for operator, ip_list in province_map.items():
+        # 处理特殊字符
+        safe_fn = operator.replace("/", "_").replace("\\", "_").replace(":", "_") + ".txt"
+        path = os.path.join(IP_DIR, safe_fn)
+        
         try:
-            with open(target_file, "w", encoding="utf-8") as f:
-                # 排序写入，保持文件整洁
-                for ip_port in sorted(set(ip_list)):
-                    f.write(ip_port + "\n")
-            print(f"📥 已更新 {operator}.txt，保留{len(ip_list)}个有效IP")
+            # 打开文件，直接覆盖写入！！核心保证
+            with open(path, "w", encoding="utf-8") as f:
+                # 去重+排序写入，保持文件整洁
+                for ip in sorted(set(ip_list)):
+                    f.write(ip + "\n")
+            print(f"✅ 已强制更新：{operator}.txt (保留 {len(ip_list)} 个)")
         except Exception as e:
-            print(f"❌ 写入{operator}.txt失败：{e}")
+            print(f"❌ 写入失败 {operator}.txt: {e}")
     
-    # 清理失败计数文件：移除已删除的IP，减小文件体积
-    reserved_all_ips = set()
-    for ip_list in province_reserved_ips.values():
-        reserved_all_ips.update(ip_list)
-    new_failed_count = {ip: cnt for ip, cnt in failed_count.items() if ip in reserved_all_ips}
+    # 3. 清理计数文件中已经被物理删除的IP
+    all_survived_ips = set(ip for lst in province_map.values() for ip in lst)
+    new_failed_count = {ip: cnt for ip, cnt in failed_count.items() if ip in all_survived_ips}
     save_failed_count(new_failed_count)
-    print(f"✅ 第三阶段完成，清理失败计数文件，剩余{len(new_failed_count)}个IP的计数记录")
+    
+    print(f"🔚 第三阶段完成。ip目录与计数文件已同步清理。")
 
 # ================= 文件推送到GitHub =================
 def push_all_files():
