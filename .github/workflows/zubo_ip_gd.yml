@@ -16,7 +16,9 @@ jobs:
       - name: 抓取gongdian并提取IP
         run: |
           set -eo pipefail
-          # 一次性读取所有现有文件，生成白名单
+          # ==============================================
+          # 【核心锁死1】一次性读取所有现有文件，生成白名单
+          # ==============================================
           declare -A initial_counts
           declare -A existing_file_whitelist  # 文件名白名单，key=文件名，value=1
           existing_files=()
@@ -113,12 +115,15 @@ jobs:
             return 1
           }
 
-          # 处理每个IP时，严格校验白名单
+          # ==============================================
+          # 【核心锁死2】处理每个IP时，严格校验白名单
+          # ==============================================
           while IFS= read -r host_port; do
-            {
+            # 单个IP处理失败不影响整体，捕获所有错误
+            (
               host="${host_port%%:*}"
               port="${host_port##*:}"
-              [ -z "$host" ] || [ -z "$port" ] && { echo "❌ 地址格式错误，跳过：$host_port"; return 0; }
+              [ -z "$host" ] || [ -z "$port" ] && { echo "❌ 地址格式错误，跳过：$host_port"; exit 0; }
               echo -e "\n🔧 开始处理：$host_port"
 
               # 解析IP
@@ -131,7 +136,7 @@ jobs:
                 write_addr="$host_port"
                 if [ -z "$query_ip" ]; then
                   echo "❌ 域名解析IP失败，跳过：$host_port"
-                  return 0
+                  exit 0
                 fi
                 echo "🌐 域名解析IP：$host → $query_ip"
               fi
@@ -139,14 +144,14 @@ jobs:
               # 过滤内网IP
               if [[ "$query_ip" =~ ^(10\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[0-1]\.|192\.168\.|22[4-9]\.|23[0-9]\.) ]]; then
                 echo "❌ 内网/组播IP，跳过：$query_ip"
-                return 0
+                exit 0
               fi
 
               # 获取归属地
               ip_info=$(get_ip_info "$query_ip")
               if [ -z "$ip_info" ]; then
                 echo "❌ 归属地查询失败，跳过：$host_port"
-                return 0
+                exit 0
               fi
 
               # 解析省份
@@ -159,7 +164,7 @@ jobs:
               echo "ℹ️  清洗后省份：$province"
               if [ "$province" = "未知" ] || [ -z "$province" ]; then
                 echo "⚠️  省份无效，跳过：$host_port"
-                return 0
+                exit 0
               fi
 
               # 解析运营商
@@ -172,23 +177,25 @@ jobs:
               fi
               if [ "$isp" = "未知" ]; then
                 echo "❌ 运营商识别失败，跳过：$host_port"
-                return 0
+                exit 0
               fi
 
-              # 校验目标文件是否在初始白名单内
+              # ==============================================
+              # 【终极锁死】校验目标文件是否在初始白名单内
+              # ==============================================
               target_filename="${province}${isp}.txt"
               target_file="./ip/$target_filename"
 
-              # 1. 先校验文件名是否在白名单
+              # 1. 先校验文件名是否在白名单（核心！杜绝新建）
               if [[ ! -v "existing_file_whitelist[$target_filename]" ]]; then
                 echo "❌ 目标文件不在白名单，跳过：$target_filename（仓库无此文件，不新建）"
-                return 0
+                exit 0
               fi
 
-              # 2. 二次校验文件物理存在
+              # 2. 二次校验文件物理存在（双重保险）
               if [ ! -f "$target_file" ]; then
                 echo "❌ 目标文件不存在，跳过：$target_filename"
-                return 0
+                exit 0
               fi
 
               # 去重追加
@@ -204,7 +211,7 @@ jobs:
               fi
 
               sleep 1
-            } || {
+            ) || {
               echo "⚠️  处理 $host_port 异常，跳过该条"
               continue
             }
