@@ -15,12 +15,13 @@ jobs:
           fetch-depth: 1
       - name: 抓取gongdian并提取IP
         run: |
+          set -eo pipefail
           # 仅初始化现有文件的统计，不处理不存在的文件
           declare -A initial_counts
           existing_files=()
           for file in ./ip/*.txt; do
             [ -f "$file" ] && {
-              initial_counts["$file"]=$(wc -l < "$file")
+              initial_counts["$file"]=$(wc -l < "$file" || echo 0)
               existing_files+=("$file")
             }
           done
@@ -29,11 +30,11 @@ jobs:
           
           mkdir -p ip
           TARGET_URL="https://gongdian.top/tv/guovin"
-          curl -L -A "okhttp/5.1.0" "$TARGET_URL" -o gongdian_iptv.txt 2>/dev/null
+          curl -L -A "okhttp/5.1.0" "$TARGET_URL" -o gongdian_iptv.txt 2>/dev/null || true
           [ ! -s gongdian_iptv.txt ] && echo "⚠️  源内容为空，跳过本步骤" && exit 0
           grep "rtp" gongdian_iptv.txt | grep -E "//([^/:]+):[0-9]+/rtp" | \
-            grep -Eo "//([^/:]+:[0-9]+)/" | sed 's#//##;s#/##' | sort -u > gongdian.txt
-          echo "✅ 已导出host:port到gongdian.txt，数量: $(wc -l < gongdian.txt)"
+            grep -Eo "//([^/:]+:[0-9]+)/" | sed 's#//##;s#/##' | sort -u > gongdian.txt || true
+          echo "✅ 已导出host:port到gongdian.txt，数量: $(wc -l < gongdian.txt || echo 0)"
           cat gongdian.txt
           [ ! -s gongdian.txt ] && echo "⚠️  无有效host:port，跳过" && exit 0
           new_ip_count=0
@@ -50,7 +51,7 @@ jobs:
           )
           match_isp_by_api() {
             local isp_raw=$1
-            isp_raw=$(echo "$isp_raw" | tr 'A-Z' 'a-z')
+            isp_raw=$(echo "$isp_raw" | tr 'A-Z' 'a-z' || echo "")
             if [[ $isp_raw =~ unicom|cu|chinaunicom|china169 ]]; then
               echo "联通"
             elif [[ $isp_raw =~ mobile|cm|chinamobile ]]; then
@@ -89,10 +90,8 @@ jobs:
             local sb_info=$(curl -s "https://api.ip.sb/geoip/$ip" \
               -A "okhttp/5.1.0" --connect-timeout 5 --max-time 10 2>/dev/null || true)
             if [ -n "$sb_info" ] && echo "$sb_info" | grep -q '"region"'; then
-              local region=$(echo "$sb_info" | grep -o '"region":"[^"]*' | cut -d'"' -f4 || true)
-              local isp=$(echo "$sb_info" | grep -o '"isp":"[^"]*' | cut -d'"' -f4 || true)
-              [ -z "$region" ] && region="未知"
-              [ -z "$isp" ] && isp="未知"
+              local region=$(echo "$sb_info" | grep -o '"region":"[^"]*' | cut -d'"' -f4 || echo "未知")
+              local isp=$(echo "$sb_info" | grep -o '"isp":"[^"]*' | cut -d'"' -f4 || echo "未知")
               echo "{\"regionName\":\"${region}\",\"isp\":\"${isp}\"}"
               return 0
             fi
@@ -100,75 +99,83 @@ jobs:
             return 1
           }
           while IFS= read -r host_port; do
-            host="${host_port%%:*}"
-            port="${host_port##*:}"
-            [ -z "$host" ] || [ -z "$port" ] && continue
-            echo -e "\n🔧 开始处理：$host_port"
-            if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              query_ip="$host"
-              write_addr="$host_port"
-              echo "ℹ️  纯IP地址，直接使用：$query_ip"
-            else
-              query_ip=$(dig +short "$host" 2>/dev/null | head -n 1 | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$" || true)
-              write_addr="$host_port"
-              if [ -z "$query_ip" ]; then
-                echo "❌ 域名解析IP失败（仅用于归属地），跳过"
-                continue
+            # 单个IP处理失败不影响整体，捕获所有错误
+            {
+              host="${host_port%%:*}"
+              port="${host_port##*:}"
+              [ -z "$host" ] || [ -z "$port" ] && { echo "❌ 地址格式错误，跳过：$host_port"; return 0; }
+              echo -e "\n🔧 开始处理：$host_port"
+              if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                query_ip="$host"
+                write_addr="$host_port"
+                echo "ℹ️  纯IP地址，直接使用：$query_ip"
+              else
+                query_ip=$(dig +short "$host" 2>/dev/null | head -n 1 | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$" || echo "")
+                write_addr="$host_port"
+                if [ -z "$query_ip" ]; then
+                  echo "❌ 域名解析IP失败（仅用于归属地），跳过：$host_port"
+                  return 0
+                fi
+                echo "🌐 域名解析IP（仅用于归属地查询）：$host → $query_ip"
+                echo "ℹ️  写入文件将保留原域名：$write_addr"
               fi
-              echo "🌐 域名解析IP（仅用于归属地查询）：$host → $query_ip"
-              echo "ℹ️  写入文件将保留原域名：$write_addr"
-            fi
-            if [[ "$query_ip" =~ ^(10\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[0-1]\.|192\.168\.|22[4-9]\.|23[0-9]\.) ]]; then
-              echo "❌ 查询IP为内网/组播IP，跳过：$query_ip"
-              continue
-            fi
-            ip_info=$(get_ip_info "$query_ip")
-            if [ -z "$ip_info" ]; then
-              echo "❌ 所有接口查询失败，跳过"
-              continue
-            fi
-            province=$(echo "$ip_info" | grep -o '"regionName":"[^"]*' | cut -d'"' -f4 || true)
-            if [[ -v "region_en2cn[$province]" ]]; then
-              province_cn="${region_en2cn[$province]}"
-              echo "ℹ️  英文省份转中文：$province → $province_cn"
-              province="$province_cn"
-            fi
-            # 统一清洗省份名，移除省/市/自治区/特别行政区
-            province=$(echo "$province" | sed -e 's/省//g' -e 's/市//g' -e 's/自治区//g' -e 's/特别行政区//g')
-            echo "ℹ️  清洗后最终省份：$province"
-            if [ -z "$province" ] || [ "$province" = "null" ] || [ "$province" = "未知" ]; then
-              province="未知"
-              echo "⚠️  接口未返回省份，设为：未知，跳过"
-              continue
-            fi
-            isp_raw=$(echo "$ip_info" | grep -o '"isp":"[^"]*' | cut -d'"' -f4 || true)
-            isp=$(match_isp_by_api "$isp_raw")
-            echo "ℹ️  阶段1-接口识别运营商：$isp（原始isp：$isp_raw）"
-            if [ "$isp" = "未知" ]; then
-              isp=$(match_isp_by_regex "$query_ip")
-              echo "ℹ️  阶段2-IP段正则兜底：$isp"
-            fi
-            [ "$isp" = "未知" ] && echo "❌ 双阶段识别运营商失败，跳过" && continue
-            # 核心修改：仅处理已存在的目标文件，移除touch新建逻辑
-            target_province="$province"
-            target_file="./ip/${target_province}${isp}.txt"
-            [ -f "$target_file" ] || {
-              echo "❌ 目标文件不存在，跳过：$(basename "$target_file")"
+              if [[ "$query_ip" =~ ^(10\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[0-1]\.|192\.168\.|22[4-9]\.|23[0-9]\.) ]]; then
+                echo "❌ 查询IP为内网/组播IP，跳过：$query_ip"
+                return 0
+              fi
+              ip_info=$(get_ip_info "$query_ip")
+              if [ -z "$ip_info" ]; then
+                echo "❌ 所有接口查询失败，跳过：$host_port"
+                return 0
+              fi
+              province=$(echo "$ip_info" | grep -o '"regionName":"[^"]*' | cut -d'"' -f4 || echo "未知")
+              if [[ -v "region_en2cn[$province]" ]]; then
+                province_cn="${region_en2cn[$province]}"
+                echo "ℹ️  英文省份转中文：$province → $province_cn"
+                province="$province_cn"
+              fi
+              # 统一清洗省份名，移除省/市/自治区/特别行政区
+              province=$(echo "$province" | sed -e 's/省//g' -e 's/市//g' -e 's/自治区//g' -e 's/特别行政区//g' || echo "未知")
+              echo "ℹ️  清洗后最终省份：$province"
+              if [ -z "$province" ] || [ "$province" = "null" ] || [ "$province" = "未知" ]; then
+                echo "⚠️  省份无效，跳过：$host_port"
+                return 0
+              fi
+              isp_raw=$(echo "$ip_info" | grep -o '"isp":"[^"]*' | cut -d'"' -f4 || echo "未知")
+              isp=$(match_isp_by_api "$isp_raw")
+              echo "ℹ️  阶段1-接口识别运营商：$isp（原始isp：$isp_raw）"
+              if [ "$isp" = "未知" ]; then
+                isp=$(match_isp_by_regex "$query_ip")
+                echo "ℹ️  阶段2-IP段正则兜底：$isp"
+              fi
+              [ "$isp" = "未知" ] && { echo "❌ 运营商识别失败，跳过：$host_port"; return 0; }
+              # 核心：仅处理已存在的目标文件
+              target_province="$province"
+              target_file="./ip/${target_province}${isp}.txt"
+              if [ ! -f "$target_file" ]; then
+                echo "❌ 目标文件不存在，跳过：$(basename "$target_file")"
+                return 0
+              fi
+              # 去重追加，增加容错
+              if ! grep -xFq "$write_addr" "$target_file" 2>/dev/null; then
+                echo "$write_addr" >> "$target_file" 2>/dev/null && {
+                  new_ip_count=$((new_ip_count + 1))
+                  echo "✅  新增成功：$write_addr → $(basename "$target_file")"
+                } || {
+                  echo "❌ 写入文件失败，跳过：$write_addr"
+                }
+              else
+                echo "ℹ️  已存在，跳过：$write_addr → $(basename "$target_file")"
+              fi
+              sleep 1
+            } || {
+              echo "⚠️  处理 $host_port 时发生异常，跳过该条，继续执行"
               continue
             }
-            # 仅往现有文件追加去重IP
-            if ! grep -xFq "$write_addr" "$target_file"; then
-              echo "$write_addr" >> "$target_file"
-              new_ip_count=$((new_ip_count + 1))
-              echo "✅  新增成功：$write_addr → $(basename "$target_file")"
-            else
-              echo "ℹ️  已存在，跳过：$write_addr → $(basename "$target_file")"
-            fi
-            sleep 1
           done < gongdian.txt
-          # 仅对现有文件去重排序
+          # 仅对现有文件去重排序，增加容错
           for file in "${existing_files[@]}"; do
-            sort -u "$file" -o "$file" 2>/dev/null || true
+            sort -u "$file" -o "$file" 2>/dev/null || echo "⚠️  排序 $file 失败，跳过"
           done
           # 清理临时文件
           rm -f gongdian_iptv.txt gongdian.txt
@@ -178,7 +185,7 @@ jobs:
           echo "====================================="
           echo "更新文件列表（仅展示有新增的）:"
           for file in "${existing_files[@]}"; do
-            final_count=$(wc -l < "$file" 2>/dev/null || 0)
+            final_count=$(wc -l < "$file" 2>/dev/null || echo 0)
             initial_count=${initial_counts["$file"]:-0}
             added=$((final_count - initial_count))
             if [ $added -gt 0 ]; then
