@@ -12,3 +12,5 @@
 hs.imyjy.cn:7088
 www.liangcl.top:8686
 www.lvyjay.win:4022
+ipv4.hs.imyjy.cn:7088
+l3.negative.video:50000

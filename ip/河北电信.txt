@@ -9,3 +9,4 @@
 27.184.29.175:4022
 dsm.xlangnan.cn:10316
 emby.xlangnan.cn:10316
+share.xlangnan.cn:10316
