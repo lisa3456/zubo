@@ -1,7 +1,7 @@
 name: zubo_ip_fsh
 on:
   schedule:
-    - cron: '0 14 * * *'
+    - cron: '0 20 * * *'
   workflow_dispatch:
 
 jobs:
