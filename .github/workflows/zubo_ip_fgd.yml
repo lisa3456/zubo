@@ -24,7 +24,7 @@ jobs:
         run: |
           echo "📡 开始执行${{ env.FOFA_DESC }}爬取（固定归属：${{ env.FIXED_PROVINCE }}${{ env.FIXED_ISP }}）"
           mkdir -p ip
-          all_ips=$(curl -sL --user-agent "Mozilla/5.0 (Linux; Android 15; V2410A Build/AP3A.240905.015.A2) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.6478.71 Mobile Safari/537.36" \
+          all_ips=$(curl -sL --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
             --referer "https://fofa.info/" ${{ env.FOFA_URL }} | grep -oE '<a href="http://([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]+)"' | cut -d'/' -f3 | sed 's/"$//' | sort -u)
           if [ -z "$all_ips" ]; then
             echo "❌ 未爬取到任何IP，跳过后续处理"
