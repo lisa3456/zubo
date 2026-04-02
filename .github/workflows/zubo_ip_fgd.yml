@@ -1,4 +1,4 @@
-name: zubo_ip_fsh
+name: zubo_ip_fgd
 on:
   schedule:
     - cron: '0 20 * * *'
@@ -15,11 +15,11 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: FOFA爬取-任务3（上海电信）
+      - name: FOFA爬取-任务3（广东电信）
         env:
-          FOFA_URL: "https://fofa.info/result?qbase64=InVkcHh5IiAmJiBjb3VudHJ5PSJDTiIgJiYgcmVnaW9uPSJTaGFuZ2hhaSIgJiYgb3JnPSJDaGluYSBUZWxlY29tIEdyb3VwIg=="
+          FOFA_URL: "https://fofa.info/result?qbase64=InVkcHh5IiAmJiBjb3VudHJ5PSJDTiIgJiYgcmVnaW9uPSJHdWFuZ2RvbmciICYmIG9yZz0iQ2hpbmFuZXQi"
           FOFA_DESC: "FOFA链接3"
-          FIXED_PROVINCE: "上海"
+          FIXED_PROVINCE: "广东"
           FIXED_ISP: "电信"
         run: |
           echo "📡 开始执行${{ env.FOFA_DESC }}爬取（固定归属：${{ env.FIXED_PROVINCE }}${{ env.FIXED_ISP }}）"
@@ -71,11 +71,11 @@ jobs:
             echo "✅ 无FOFA3 IP更新，无需提交"
           else
             if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-              commit_msg="手动触发-上海电信FOFA3 IP爬取更新"
+              commit_msg="手动触发-广东电信FOFA3 IP爬取更新"
             else
-              commit_msg="定时触发-上海电信FOFA3 IP爬取更新"
+              commit_msg="定时触发-广东电信FOFA3 IP爬取更新"
             fi
             git commit -m "$commit_msg"
             git push
-            echo "✅ 已提交推送上海电信FOFA3 IP更新"
+            echo "✅ 已提交推送广东电信FOFA3 IP更新"
           fi
