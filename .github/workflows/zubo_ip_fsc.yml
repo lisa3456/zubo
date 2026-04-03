@@ -1,7 +1,7 @@
 name: zubo_ip_fsc
 on:
   schedule:
-    - cron: '0 17 * * *'
+    - cron: '0 14,17 * * *'
   workflow_dispatch:
 
 jobs:
