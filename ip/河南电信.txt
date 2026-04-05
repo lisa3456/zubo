@@ -5,3 +5,4 @@
 esxi.juzhijian.com:8822
 sdray.gicp.net:8822
 server.juzhijian.com:8822
+182.119.67.38:4000

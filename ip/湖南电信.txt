@@ -7,3 +7,5 @@ phmanet.com:9999
 www.andy-nas.top:8623
 www.hunterpoon.tech:4000
 www.zlizi.cn:4023
+118.251.19.116:8188
+58.46.30.140:8188

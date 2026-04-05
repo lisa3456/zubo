@@ -2,3 +2,5 @@ home2.neumantang.com:8888
 izihao.cn:9977
 www.alphauncle.com:2715
 xcarchain.com:8888
+112.192.72.246:8484
+112.192.72.247:8484
