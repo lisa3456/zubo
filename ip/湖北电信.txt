@@ -11,7 +11,9 @@
 27.19.67.44:8888
 58.19.32.207:4022
 59.173.121.80:8808
+nas.lyfkai.cn:19999
 www.hiliu.myds.me:18088
 www.jeyme.top:40000
+www.xk8.top:8001
 xu3791vg3503.vicp.fun:8808
 zhangkx717.cn:9999

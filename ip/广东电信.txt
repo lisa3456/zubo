@@ -2,6 +2,8 @@
 113.101.244.48:10000
 113.102.83.19:4022
 113.103.36.33:9999
+113.104.187.140:7088
+113.119.24.69:58888
 113.119.24.73:58888
 113.65.124.131:9530
 113.65.176.11:10000
@@ -36,12 +38,15 @@ hello.ejoydom.com:9999
 hongzhijiaoyu.net:8188
 idc.zymok.cn:10000
 ikuai.huase.ltd:8888
+iptv.xxika.net:8188
 kodbox.guangyuan.site:8188
 lbyjlt.vv5678.cn:8880
 pr.19760929.xyz:9688
+vp.maomizi.cc:9530
 wmh.wmh.ink:6633
 www.8888866.xyz:10000
 www.maomizi.cn:9527
+www.maomizi.cn:9530
 www.yahao.host:4022
 xxika.synology.me:8188
 yahao.myqnapcloud.com:4022

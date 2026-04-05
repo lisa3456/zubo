@@ -3,3 +3,5 @@
 171.8.84.159:8800
 171.8.84.159:8811
 esxi.juzhijian.com:8822
+sdray.gicp.net:8822
+server.juzhijian.com:8822

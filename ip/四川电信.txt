@@ -15,5 +15,6 @@
 182.147.108.30:2222
 221.237.114.180:4000
 nas.cdbackup.cn:8888
+nas.uclive.site:8000
 wan1.tangwudi.cc:47859
 zqh2333.top:2222

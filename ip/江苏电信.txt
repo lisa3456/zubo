@@ -13,11 +13,13 @@
 221.228.159.192:8001
 222.184.137.30:8888
 222.189.167.42:4022
+49.77.142.230:888
 49.77.20.134:8118
 home.amucn.net:8800
 kouki.pro:8888
 www.huijie5421.cn:8800
 www.sclvip.top:5566
 www.sclvip.top:8787
+www.wxzmz.com:8800
 www.yzddy.top:8800
 z.d4p.cn:8000
